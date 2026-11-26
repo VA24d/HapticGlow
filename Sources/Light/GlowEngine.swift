@@ -258,6 +258,8 @@ final class GlowEngine: @unchecked Sendable {
     private var logiOn = false
     private var logiEverOn = false   // Logitech was engaged at some point this session; stop() hands it back
     private let ctl = UnfairLock()
+    /// Serial queue for built-in backlight hand-backs; start() drains it before taking over again.
+    private let restoreQueue = DispatchQueue(label: "hapticglow.glow.restore", qos: .userInitiated)
     private var started = false
 
     var status: EngineStatus { statusBox.get() }
@@ -276,6 +278,7 @@ final class GlowEngine: @unchecked Sendable {
     func start() {
         ctl.lock(); defer { ctl.unlock() }
         guard !started else { return }
+        restoreQueue.sync { }
         let d = BacklightDriver.shared
         let c = cfg.get()
         // Without a built-in backlight the engine can still drive a Logitech keyboard; driver calls are no-ops then.
@@ -325,8 +328,9 @@ final class GlowEngine: @unchecked Sendable {
         t.resume()
     }
 
-    /// Stops the loop and restores the user's backlight. With `quitting` the Logitech hand-back is left to
-    /// `LogitechBacklight.restoreForQuit()`, which the quit path runs once afterwards.
+    /// Stops the loop and restores the user's backlight. With `quitting` both hand-backs are left to the quit
+    /// coordinator, which runs them once, concurrently and bounded. Otherwise the built-in restore runs on a
+    /// serial queue and the Logitech restore on its writer thread, so the caller never waits on hardware.
     func stop(quitting: Bool = false) {
         ctl.lock(); defer { ctl.unlock() }
         guard started else { return }
@@ -337,10 +341,9 @@ final class GlowEngine: @unchecked Sendable {
         queue.sync { }                       // wait for an in-flight frame
         SystemLoad.shared.setActive(false); heartSampling = false
         AudioAnalyzer.setOnsetDemand(.glow, false); onsetDemand = false
-        BacklightDriver.shared.restore()
         if !quitting {
-            if logiOn { LogitechBacklight.shared.release() }
-            if logiOn || logiEverOn { LogitechBacklight.shared.restore() }
+            restoreQueue.async { BacklightDriver.shared.restore() }
+            if logiOn || logiEverOn { LogitechBacklight.shared.release() }
             logiEverOn = false
         }
         logiOn = false

@@ -528,12 +528,24 @@ enum Log {
     static func write(_ msg: String) {
         logger.log("\(msg, privacy: .public)")
         let line = "[\(String(format: "%.3f", hostNow()))] \(msg)\n"
+        let data = Data(line.utf8)
         fileLock.withLock {
             if let h = try? FileHandle(forWritingTo: fileURL) {
-                h.seekToEndOfFile(); h.write(line.data(using: .utf8)!); try? h.close()
+                let size = h.seekToEndOfFile()
+                if size >= maxFileBytes {
+                    try? h.close()
+                    let old = fileURL.deletingLastPathComponent().appendingPathComponent("hapticglow.1.log")
+                    try? FileManager.default.removeItem(at: old)
+                    try? FileManager.default.moveItem(at: fileURL, to: old)
+                    try? data.write(to: fileURL)
+                } else {
+                    h.write(data); try? h.close()
+                }
             } else {
-                try? line.data(using: .utf8)!.write(to: fileURL)
+                try? data.write(to: fileURL)
             }
         }
     }
+    /// The log rolls over to hapticglow.1.log (one old file kept) past this size.
+    private static let maxFileBytes: UInt64 = 2 * 1024 * 1024
 }

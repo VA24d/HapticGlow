@@ -306,8 +306,7 @@ final class AppModel {
         KeyMonitor.shared.stop()
         SystemAudioTap.shared.shutdown()
         ScreenCaptureAudio.shared.shutdown()
-        BacklightDriver.shared.restore()
-        LogitechBacklight.shared.restoreForQuit()
+        QuitCoordinator.handBack()
     }
 
     func refreshStatuses() {

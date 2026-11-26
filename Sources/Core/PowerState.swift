@@ -35,7 +35,7 @@ final class PowerState: @unchecked Sendable {
             Unmanaged<PowerState>.fromOpaque(ctx).takeUnretainedValue().refresh(notify: true)
         }, ctx)?.takeRetainedValue() {
             runLoopSource = src
-            CFRunLoopAddSource(CFRunLoopGetMain(), src, .defaultMode)
+            CFRunLoopAddSource(CFRunLoopGetMain(), src, .commonModes)
         }
     }
 
