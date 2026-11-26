@@ -1,7 +1,10 @@
+// SPDX-License-Identifier: GPL-3.0-only
+// Copyright 2026 Vijay A. HapticGlow: https://github.com/VA24d/HapticGlow
+// Additional attribution terms under GPLv3 section 7(b): see NOTICE.md.
 // HapticGlow — shared contract between engines and UI.
 //
-// FROZEN API: engines and UI are written against these exact names. Implementations may add
-// private helpers and extra (defaulted) fields, but must not rename or remove anything here.
+// Stable interface between the engines and the UI. Implementations may add private helpers and
+// extra (defaulted) fields, but should not rename or remove anything here.
 //
 // Threading model
 // - Audio tap IO thread  -> AudioAnalyzer.process(...) -> FeatureBus.publish(...)

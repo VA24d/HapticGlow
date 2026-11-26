@@ -13,7 +13,7 @@ jobs:
     runs-on: macos-26
     timeout-minutes: 60
     env:
-      HAVE_CERT: ${{ secrets.MACOS_CERT_P12 != '' }}
+      HAVE_CERT: ${{ secrets.MACOS_CERT_P12 != '' && secrets.MACOS_CERT_PASSWORD != '' && secrets.MACOS_SIGN_ID != '' }}
       HAVE_NOTARY: ${{ secrets.NOTARY_APPLE_ID != '' && secrets.NOTARY_TEAM_ID != '' && secrets.NOTARY_PASSWORD != '' }}
     steps:
       - uses: actions/checkout@v4
@@ -112,6 +112,8 @@ jobs:
           # Same DMG under a fixed name, so the README can link straight to
           # releases/latest/download/HapticGlow.dmg.
           cp "$(basename "$DMG")" HapticGlow.dmg
+          shasum -a 256 HapticGlow.dmg > HapticGlow.dmg.sha256
+          cat HapticGlow.dmg.sha256
 
       - name: Remove signing keychain
         if: always() && env.KEYCHAIN != ''
@@ -124,4 +126,4 @@ jobs:
           gh release create "$GITHUB_REF_NAME" \
             --title "HapticGlow ${GITHUB_REF_NAME#v}" \
             --generate-notes --verify-tag \
-            "$DMG" "$DMG.sha256" build/HapticGlow.dmg
+            "$DMG" "$DMG.sha256" build/HapticGlow.dmg build/HapticGlow.dmg.sha256

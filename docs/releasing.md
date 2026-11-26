@@ -1,6 +1,6 @@
 # Releasing HapticGlow
 
-Releases are built by `.github/workflows/release.yml` when a tag starting with `v` is pushed. The workflow builds the app, signs it, wraps it in a DMG, and attaches the DMG and its SHA-256 file to a GitHub Release with generated notes.
+Releases are built by `.github/workflows/release.yml` when a tag starting with `v` is pushed. The workflow builds the app, signs it, wraps it in a DMG, and attaches the versioned DMG, a fixed-name `HapticGlow.dmg` copy, and a SHA-256 file for each to a GitHub Release with generated notes.
 
 ## Cut a release
 
@@ -49,7 +49,7 @@ You need a paid Apple Developer Program membership.
    | `NOTARY_TEAM_ID` | Ten-character team ID |
    | `NOTARY_PASSWORD` | The app-specific password from step 4 |
 
-The signing steps run when `MACOS_CERT_P12` exists. The notarization steps run when the three `NOTARY_*` secrets also exist. Nothing else in the workflow changes.
+The signing steps run only when `MACOS_CERT_P12`, `MACOS_CERT_PASSWORD` and `MACOS_SIGN_ID` are all set and non-empty; if any is missing the app is signed ad-hoc. The notarization steps run when the three `NOTARY_*` secrets also exist. Nothing else in the workflow changes.
 
 ## Branch protection on `main`
 

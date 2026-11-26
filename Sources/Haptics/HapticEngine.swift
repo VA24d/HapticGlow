@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-only
+// Copyright 2026 Vijay A. HapticGlow: https://github.com/VA24d/HapticGlow
+// Additional attribution terms under GPLv3 section 7(b): see NOTICE.md.
 // HapticGlow - haptic voice mixer + realtime-ish scheduler for the Force Touch trackpad.
 // Voice shapes ported from nospeaker (MIT, os6 / Cody Collier): thump f(t)=f_end+(f_start-f_end)exp(-t/0.02),
 // level^0.45 perceptual curve, two-tone (a1, 1.8*a2) weighting, 2.7-4.3 kHz fricative bursts, absolute-deadline
@@ -75,6 +78,7 @@ final class HapticEngine: @unchecked Sendable {
         let g = gen
         _status = .running
         lock.unlock()
+        syncOnsetDemand()
         let am0 = lock.withLock { autoMode }
         inLock.withLock { inMovieActive = (c.enabled && Self.resolved(c, auto: am0).mode == .movie); inMovieFrames.removeAll(keepingCapacity: true) }
         featToken = FeatureBus.shared.subscribe { [weak self] f in self?.onFeatures(f) }
@@ -97,13 +101,14 @@ final class HapticEngine: @unchecked Sendable {
         lock.unlock()
         idleWake.signal()
         guard was else { return }
+        syncOnsetDemand()
         FeatureBus.shared.unsubscribe(featToken)
         KeyBus.shared.unsubscribe(keyToken)
     }
 
     func update(_ new: HapticConfig) {
         let old: HapticConfig = lock.withLock { let o = cfg; cfg = new; return o }
-        defer { idleWake.signal() }
+        defer { idleWake.signal(); syncOnsetDemand() }
         // Only an explicit user toggle resets the governor; Auto source flips never do.
         if old.enabled != new.enabled || old.mode != new.mode { TrackpadMotor.shared.resetGovernor() }
         let am = lock.withLock { autoMode }
@@ -144,6 +149,23 @@ final class HapticEngine: @unchecked Sendable {
             if !inMovieActive { inMovieFrames.removeAll(keepingCapacity: true) }
         }
         idleWake.signal()
+        syncOnsetDemand()
+    }
+
+    private let demandLock = UnfairLock()
+    private var onsetDemand = false
+
+    /// Tell the analyzer whether the effective mode reacts to single onsets (music, movie, kick).
+    private func syncOnsetDemand() {
+        let need: Bool = lock.withLock {
+            let r = Self.resolved(cfg, auto: autoMode)
+            return running && r.enabled && (r.mode == .music || r.mode == .movie || r.mode == .kick)
+        }
+        demandLock.withLock {
+            if need == onsetDemand { return }
+            onsetDemand = need
+            AudioAnalyzer.setOnsetDemand(.haptics, need)
+        }
     }
 
     /// Fire one kick thump at the current strength (test button).

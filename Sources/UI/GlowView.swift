@@ -1,13 +1,19 @@
+// SPDX-License-Identifier: GPL-3.0-only
+// Copyright 2026 Vijay A. HapticGlow: https://github.com/VA24d/HapticGlow
+// Additional attribution terms under GPLv3 section 7(b): see NOTICE.md.
 // Keyboard Glow: live preview, mode gallery, brightness and behaviour controls.
 import SwiftUI
 
 struct GlowView: View {
     @Bindable var model = AppModel.shared
-    @State private var logiTick = 0
+
+    private var heartInUse: Bool {
+        let g = model.glow
+        return g.mode == .heartbeat || (g.autoActive && g.idleMode == .heartbeat)
+    }
 
     /// "MX KEYS B · 8 levels · 24 ms Bluetooth, sent early" or a hint when none is connected.
-    private var logiSubtitle: String {
-        _ = logiTick
+    private static func logiSubtitle() -> String {
         let lb = LogitechBacklight.shared
         guard let name = lb.keyboardNames.first else {
             return "Mirrors the glow on an MX Keys keyboard over Bluetooth. None connected."
@@ -15,15 +21,13 @@ struct GlowView: View {
         return "\(name) · \(lb.levelCount) levels · \(Int((lb.leadSeconds * 1000).rounded())) ms Bluetooth delay, sent early to stay in sync."
     }
 
-    private var heartInUse: Bool {
-        let g = model.glow
-        return g.mode == .heartbeat || (g.autoActive && g.idleMode == .heartbeat)
-    }
-
-    /// "CPU 23 % -> 68 bpm" while following, else the fixed resting rate.
-    private var heartSubtitle: String {
-        _ = logiTick
-        guard model.glow.heartFollowsCPU else { return "Heartbeat keeps a steady rate." }
+    /// Live CPU text only while the engine runs with the glow on; otherwise the fixed text.
+    private static func heartSubtitle() -> String {
+        let m = AppModel.shared
+        guard m.glow.heartFollowsCPU else { return "Heartbeat keeps a steady rate." }
+        guard m.isRunning && m.glow.enabled else {
+            return "Heartbeat speeds up with the processor while the glow is running."
+        }
         let l = SystemLoad.shared
         return "Heartbeat speeds up with the processor. Now \(Int((l.load * 100).rounded())) % load, \(Int(l.bpm.rounded())) bpm."
     }
@@ -175,7 +179,7 @@ struct GlowView: View {
             SectionHeader("Behaviour").padding(.top, Theme.Space.s)
             Card {
                 if heartInUse {
-                    ToggleRow(title: "Follow CPU load", subtitle: heartSubtitle, isOn: $model.glow.heartFollowsCPU)
+                    PolledSubtitleToggle(title: "Follow CPU load", subtitle: Self.heartSubtitle, isOn: $model.glow.heartFollowsCPU)
                     Rectangle().fill(Theme.hairline).frame(height: 0.5)
                 }
                 ToggleRow(title: "Key flash", subtitle: "Add a quick flash on every key press, on top of any mode.", isOn: $model.glow.keyFlash)
@@ -184,19 +188,30 @@ struct GlowView: View {
                           subtitle: "macOS dims the keyboard 5 s after you stop typing; HapticGlow keeps it lit while running.",
                           isOn: $model.glow.keepAwake)
                 Rectangle().fill(Theme.hairline).frame(height: 0.5)
-                ToggleRow(title: "Logitech keyboard",
-                          subtitle: logiSubtitle,
-                          isOn: $model.glow.logitech)
-            }
-            .task {   // refresh Logitech / CPU heartbeat status lines while the page is open and visible
-                while !Task.isCancelled {
-                    if UIPulse.anyWindowVisible() && (heartInUse || model.glow.logitech) {
-                        logiTick &+= 1
-                    }
-                    try? await Task.sleep(for: .seconds(PowerState.shared.saver ? 3 : 2))
-                }
+                PolledSubtitleToggle(title: "Logitech keyboard", subtitle: Self.logiSubtitle, isOn: $model.glow.logitech)
             }
         }
+    }
+}
+
+/// Toggle row whose subtitle is re-read on a timer; only the subtitle text is re-evaluated.
+private struct PolledSubtitleToggle: View {
+    let title: String
+    let subtitle: () -> String
+    @Binding var isOn: Bool
+    var body: some View {
+        HStack(alignment: .center, spacing: 12) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title).font(Theme.Font.label).foregroundStyle(Theme.textPrimary)
+                Polled(every: 2, read: subtitle) { text in
+                    Text(text).font(Theme.Font.caption).foregroundStyle(Theme.textTertiary)
+                }
+            }
+            Spacer(minLength: 8)
+            Toggle(title, isOn: $isOn).labelsHidden()
+        }
+        .toggleStyle(.switch)
+        .controlSize(.small)
     }
 }
 

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-only
+// Copyright 2026 Vijay A. HapticGlow: https://github.com/VA24d/HapticGlow
+// Additional attribution terms under GPLv3 section 7(b): see NOTICE.md.
 // Guided A/B feel test: five rounds, each plays two kick variants; the winner's width and body pitch
 // are written into HapticConfig (punch and pitch).
 import SwiftUI
@@ -107,8 +110,10 @@ struct HapticsFeelTest: View {
                 HStack(spacing: 4) {
                     ForEach(1...FeelTestModel.rounds, id: \.self) { i in
                         Capsule().fill(i <= t.round ? Theme.accent : Theme.track).frame(width: 18, height: 4)
+                            .accessibilityHidden(true)
                     }
                 }
+                .accessibilityHidden(true)
             }
             HStack(spacing: Theme.Space.m) {
                 option("A", isA: true)

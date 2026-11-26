@@ -1,6 +1,6 @@
 # User guide
 
-The sidebar lists eight pages. `Cmd+1` to `Cmd+7` jump to Dashboard, Glow, Haptics, Sounds, Audio, Permissions and Settings; `Cmd+/` shows every shortcut. Typing Practice has no number shortcut.
+The sidebar lists eight pages. `Cmd+1` to `Cmd+8` jump to Dashboard, Typing Practice, Keyboard Glow, Trackpad Haptics, Key Sounds, Audio Input, Permissions and Settings; `Cmd+/` shows every shortcut.
 
 Press **Start** on the Dashboard (or `Cmd+Return`) to switch everything on. Press it again to stop. On stop and on quit, the app puts the keyboard backlight back the way macOS had it.
 
@@ -112,7 +112,7 @@ It can be hidden in Settings.
 | `Cmd+Option+Up` and `Down` | Raise or lower the brightness ceiling by 0.05 |
 | `Cmd+M` | Mute or unmute key sounds |
 | `Cmd+Shift+H` | Haptics on or off |
-| `Cmd+1` to `Cmd+7` | Dashboard, Glow, Haptics, Sounds, Audio, Permissions, Settings |
+| `Cmd+1` to `Cmd+8` | Dashboard, Typing Practice, Keyboard Glow, Trackpad Haptics, Key Sounds, Audio Input, Permissions, Settings |
 | `Cmd+,` | Settings |
 | `Cmd+/` | Shortcut cheat sheet |
 | `Cmd+Option+M` | Minimize |

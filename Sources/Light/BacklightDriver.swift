@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-only
+// Copyright 2026 Vijay A. HapticGlow: https://github.com/VA24d/HapticGlow
+// Additional attribution terms under GPLv3 section 7(b): see NOTICE.md.
 // HapticGlow — keyboard backlight driver (CoreBrightness private framework) + crash-safe state guard.
 //
 // Ported from MagicKey (MIT, XiaoSong1223): Driver.swift (selector protocol, 8-bit dedupe) and
@@ -61,7 +64,7 @@ final class BacklightDriver: @unchecked Sendable {
     private let client: KBClient?
     private let kbID: UInt64
 
-    // Measured on M5 Pro / macOS 27 (research/notes/backlight-hardware.md):
+    // Measured Apple Silicon backlight timings:
     //  - plain setBrightness:forKeyboard: makes corebrightnessd ramp for ~350 ms, so 120 Hz writes never land.
     //  - setBrightness:fadeSpeed:0 commit:NO applies the duty in ~0.3 ms (lag 2-4 ms at 120/240 writes/s).
     //  - fadeSpeed 0 silently ignores an exact 0.0; "off" therefore goes through the plain call.
@@ -70,7 +73,7 @@ final class BacklightDriver: @unchecked Sendable {
     private var lastValue: Float = -1
     private var isOff = false
 
-    // Dark-band glide (see research/notes/backlight-hardware.md). Duty below 54 ticks cannot be addressed
+    // Dark-band glide. Duty below 54 ticks cannot be addressed
     // by value (anything > 0 clamps to 54, exact 0 is "off" = duty 6), but a PLAIN setBrightness is a
     // linear corebrightnessd ramp (~107 ticks/s, 19 ms latency) that starts from the live duty and can be
     // redirected mid-flight. The driver therefore runs the band feed-forward: one plain write toward 0 to

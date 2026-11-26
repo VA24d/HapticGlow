@@ -1,4 +1,7 @@
-// Design tokens (T3 Code-like neutral look). Names are FROZEN; values may be tuned by the UI shell.
+// SPDX-License-Identifier: GPL-3.0-only
+// Copyright 2026 Vijay A. HapticGlow: https://github.com/VA24d/HapticGlow
+// Additional attribution terms under GPLv3 section 7(b): see NOTICE.md.
+// Design tokens.
 import SwiftUI
 import AppKit
 

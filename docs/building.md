@@ -18,7 +18,7 @@ HapticGlow builds with the Command Line Tools alone. There is no Xcode project a
 
 What a build does:
 
-1. Writes a VFS overlay to `build/overlay.yaml` (see below).
+1. Under the Command Line Tools only, writes a VFS overlay to `build/overlay.yaml` (see below). With full Xcode this file is not written.
 2. Compiles `Sources/**/*.swift` for `arm64-apple-macos26.0` in Swift 5 language mode.
 3. Assembles `build/HapticGlow.app` from `Resources/Info.plist`, `Resources/AppIcon.icns`, `LICENSE.md`, `NOTICE.md` and the `Sounds/` folder.
 4. Signs the bundle (see below).
@@ -58,6 +58,11 @@ build/HapticGlow.app/Contents/MacOS/HapticGlow --silent
 |---|---|
 | `--silent` | Starts with key sounds and haptics off. Use it for any run that must stay quiet. |
 | `--logi-probe --test` | Probes a connected Logitech MX Keys and prints what it finds. Changes the backlight only. |
+| `--probe-audio <file>` | Analyzes an audio file offline, prints duration, onsets per second, BPM and mean bass, then exits without opening a window. |
+
+## Hardware probe
+
+`Tools/backlight_probe.swift` is a standalone script that measures the built-in keyboard backlight (phases `info`, `hid`, `curve`, `step`, `track`, `cost`). Compile it with `swiftc Tools/backlight_probe.swift -o build/backlight_probe` (under the Command Line Tools add `-vfsoverlay build/overlay.yaml`) and run `build/backlight_probe info`. It changes only the backlight.
 
 ## Releases
 

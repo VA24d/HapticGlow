@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-only
+// Copyright 2026 Vijay A. HapticGlow: https://github.com/VA24d/HapticGlow
+// Additional attribution terms under GPLv3 section 7(b): see NOTICE.md.
 // Logitech keyboard backlight (MX Keys family) over HID++ 2.0, feature BACKLIGHT2 (0x1982).
 //
 // Transport: the keyboard's vendor collection (usage page 0xFF43, usage 0x0202) takes 20-byte
@@ -80,6 +83,8 @@ final class HIDPPDevice: @unchecked Sendable {
     let device: IOHIDDevice
     let name: String
     let serial: String
+    /// Serial for log lines: only the last 4 characters.
+    var maskedSerial: String { serial.isEmpty ? "none" : "..." + serial.suffix(4) }
     /// UserDefaults key for this keyboard. Stable when the serial is sometimes missing: the last serial seen
     /// for this product name is reused, and a legacy name-only entry is moved over once.
     let storageKey: String
@@ -798,7 +803,7 @@ final class LogitechBacklight: @unchecked Sendable {
                 lastLevel: -1,
                 dirty: leftDirty
             ))
-            Log.write("[logi] \(h.name) (\(h.serial)): BACKLIGHT2 index \(fi), \(levels) levels, live \(Self.hex(cfg)), \(originNote)")
+            Log.write("[logi] \(h.name) (\(h.maskedSerial)): BACKLIGHT2 index \(fi), \(levels) levels, live \(Self.hex(cfg)), \(originNote)")
         }
 
         lock.withLock {
@@ -1435,7 +1440,7 @@ final class LogitechBacklight: @unchecked Sendable {
         for b in lb.lock.withLock({ lb.boards }) {
             let origHex = b.original.map(hex) ?? "none"
             let origMode = b.original.map { String(mode(of: $0)) } ?? "none"
-            say("\(b.hid.name) (serial='\(b.hid.serial)'): feature \(b.feature), live \(hex(b.baseConfig)) mode \(mode(of: b.baseConfig)), savedOriginal \(origHex) mode \(origMode)")
+            say("\(b.hid.name) (serial='\(b.hid.maskedSerial)'): feature \(b.feature), live \(hex(b.baseConfig)) mode \(mode(of: b.baseConfig)), savedOriginal \(origHex) mode \(origMode)")
         }
         var allPassed = true
         for b in lb.lock.withLock({ lb.boards }) {

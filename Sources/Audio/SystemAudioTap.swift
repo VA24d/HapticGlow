@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-only
+// Copyright 2026 Vijay A. HapticGlow: https://github.com/VA24d/HapticGlow
+// Additional attribution terms under GPLv3 section 7(b): see NOTICE.md.
 // Core Audio Process Tap capture of the system output mix (no BlackHole, no mic).
 // Ported from MagicKey (MIT, XiaoSong1223) AudioTap.swift / AudioActivity.swift: tap + private
 // aggregate recipe, 10 s IOProc-creation timeout, strict teardown order, device-change rebuild,
@@ -5,6 +8,7 @@
 import Foundation
 import CoreAudio
 import AudioToolbox
+import Synchronization
 
 private func gAddr(_ s: AudioObjectPropertySelector) -> AudioObjectPropertyAddress {
     AudioObjectPropertyAddress(mSelector: s, mScope: kAudioObjectPropertyScopeGlobal,
@@ -83,8 +87,17 @@ private func ownProcessObject() -> AudioObjectID? {
 
 /// Counters written by the IO thread (single writer, no locks) and read by the watchdog.
 private final class TapStats: @unchecked Sendable {
-    var callbacks: UInt64 = 0
-    var peakBits: UInt32 = 0
+    let callbacks = Atomic<UInt64>(0)
+    let peakBits = Atomic<UInt32>(0)
+    /// Raises the stored peak (non-negative floats order as their bits).
+    @inline(__always) func notePeak(_ bits: UInt32) {
+        var cur = peakBits.load(ordering: .relaxed)
+        while bits > cur {
+            let r = peakBits.compareExchange(expected: cur, desired: bits, ordering: .relaxed)
+            if r.exchanged { return }
+            cur = r.original
+        }
+    }
     /// Consecutive samples of exact digital silence (nothing but us is playing). Once this passes ~0.6 s the
     /// IO thread stops feeding the analyzer; the first non-silent buffer resumes it at once.
     var quietSamples: Int = 0
@@ -140,8 +153,7 @@ final class SystemAudioTap: @unchecked Sendable {
     var sampleRate: Double { lock.withLock { _sampleRate } }
     /// Peak |sample| seen since the last call (diagnostics; resets on read).
     func takePeak() -> Float {
-        let b = stats.peakBits; stats.peakBits = 0
-        return Float(bitPattern: b)
+        Float(bitPattern: stats.peakBits.exchange(0, ordering: .relaxed))
     }
 
     private let lock = UnfairLock()
@@ -156,6 +168,8 @@ final class SystemAudioTap: @unchecked Sendable {
     private var resources: TapResources?
     private var watchdog: DispatchSourceTimer?
     private var listener: AudioObjectPropertyListenerBlock?
+    private var rateListener: AudioObjectPropertyListenerBlock?
+    private var rateDevice = AudioObjectID(kAudioObjectUnknown)
     private var rebuildGen: UInt64 = 0
     private var recoverGen: UInt64 = 0
     private var recoverStep = 0
@@ -310,7 +324,7 @@ final class SystemAudioTap: @unchecked Sendable {
 
     private func build(trigger: String) -> Bool {
         setState(.starting)
-        stats.callbacks = 0; stats.peakBits = 0; stats.quietSamples = 0
+        stats.callbacks.store(0, ordering: .relaxed); stats.peakBits.store(0, ordering: .relaxed); stats.quietSamples = 0
         everFlowed = false; lastCount = 0; stuckTicks = 0
         guard let outUID = defaultOutputUID() else { return fail("No output device") }
         guard #available(macOS 14.2, *) else { setState(.unsupported); return false }
@@ -387,8 +401,8 @@ final class SystemAudioTap: @unchecked Sendable {
             let p = raw.assumingMemoryBound(to: Float.self)
             var pk: Float = 0
             for i in 0..<n { let a = abs(p[i]); if a > pk { pk = a } }
-            if pk.bitPattern > stats.peakBits { stats.peakBits = pk.bitPattern }  // non-negative floats order as bits
-            stats.callbacks &+= 1
+            stats.notePeak(pk.bitPattern)
+            stats.callbacks.wrappingAdd(1, ordering: .relaxed)
             // Nothing else is playing (our own audio is excluded, so the mix is exact zeros): skip the analysis
             // after 0.6 s. The first non-silent buffer re-enables it with no added latency.
             if pk < 1e-7 {
@@ -466,7 +480,7 @@ final class SystemAudioTap: @unchecked Sendable {
         // was built before that, our own clicks would feed the analyzer: rebuild once it can be excluded.
         if desired, rebuildIfExclusionStale() { return }
         let now = hostNow()
-        let c = stats.callbacks
+        let c = stats.callbacks.load(ordering: .relaxed)
         let dt = max(0.001, now - lastTick)
         let rate = Double(c &- lastCount) / dt
         lock.withLock { _rate = rate }
@@ -517,21 +531,50 @@ final class SystemAudioTap: @unchecked Sendable {
         var addr = gAddr(kAudioHardwarePropertyDefaultOutputDevice)
         let blk: AudioObjectPropertyListenerBlock = { [weak self] _, _ in
             guard let self else { return }
-            self.rebuildGen &+= 1
-            let g = self.rebuildGen
-            self.setupQueue.asyncAfter(deadline: .now() + 0.5) { [weak self] in
-                guard let self, self.rebuildGen == g, self.desired else { return }
-                self.stopWatchdog()
-                self.resources?.destroy(); self.resources = nil
-                if !self.build(trigger: "device change") { self.scheduleRecovery() }
-            }
+            // The new default device needs its own sample-rate listener.
+            self.installRateListener()
+            self.scheduleRebuild("device change")
         }
         if AudioObjectAddPropertyListenerBlock(AudioObjectID(kAudioObjectSystemObject), &addr, setupQueue, blk) == noErr {
             listener = blk
+            installRateListener()
         }
     }
 
+    private func scheduleRebuild(_ trigger: String) {
+        rebuildGen &+= 1
+        let g = rebuildGen
+        setupQueue.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+            guard let self, self.rebuildGen == g, self.desired else { return }
+            self.stopWatchdog()
+            self.resources?.destroy(); self.resources = nil
+            if !self.build(trigger: trigger) { self.scheduleRecovery() }
+        }
+    }
+
+    /// An in-place nominal sample-rate change (Bluetooth A2DP to HFP, Audio MIDI Setup) keeps the same device,
+    /// so the default-device listener never fires; watch the rate on the current output device too.
+    private func installRateListener() {
+        removeRateListener()
+        let dev = defaultOutputDevice()
+        guard dev != AudioObjectID(kAudioObjectUnknown) else { return }
+        var addr = gAddr(kAudioDevicePropertyNominalSampleRate)
+        let blk: AudioObjectPropertyListenerBlock = { [weak self] _, _ in self?.scheduleRebuild("sample rate change") }
+        if AudioObjectAddPropertyListenerBlock(dev, &addr, setupQueue, blk) == noErr {
+            rateListener = blk; rateDevice = dev
+        }
+    }
+
+    private func removeRateListener() {
+        guard let blk = rateListener else { return }
+        rateListener = nil
+        var addr = gAddr(kAudioDevicePropertyNominalSampleRate)
+        _ = AudioObjectRemovePropertyListenerBlock(rateDevice, &addr, setupQueue, blk)
+        rateDevice = AudioObjectID(kAudioObjectUnknown)
+    }
+
     private func removeListener() {
+        removeRateListener()
         guard let blk = listener else { return }
         listener = nil
         var addr = gAddr(kAudioHardwarePropertyDefaultOutputDevice)

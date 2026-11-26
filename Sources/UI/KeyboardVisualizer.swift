@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-only
+// Copyright 2026 Vijay A. HapticGlow: https://github.com/VA24d/HapticGlow
+// Additional attribution terms under GPLv3 section 7(b): see NOTICE.md.
 // Live MacBook Pro / MacBook Air keyboard: authentic Apple Silicon 14.5u proportions, black keys,
 // white backlit legends with subtle halo and under-key light bleed driven by perceived
 // GlowEngine.shared.currentLevel (sqrt) + KeyBus per-key flashes, single Canvas compositing cached
@@ -1063,6 +1066,8 @@ struct KeyboardVisualizer: View {
     var kind: MacKeyboardKind = KeyLayout.kind
     var previewLevel: Float? = nil
     var onKey: ((KeyCap) -> Void)? = nil
+    /// Called for every click on the keyboard, whether or not it hits a key.
+    var onTap: (() -> Void)? = nil
     /// Externally typed key (e.g. from KeyCatcher): lights that key like a click would. `seq` makes repeats distinct.
     var trigger: KeyTrigger? = nil
 
@@ -1070,8 +1075,21 @@ struct KeyboardVisualizer: View {
 
     @State private var model = KeyboardVizModel()
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.displayScale) private var displayScale
+
+    /// Everything that changes the drawn raster; a change wakes a redraw even while the timeline is paused.
+    private struct DrawInputs: Equatable {
+        var style: Style
+        var showTrackpad: Bool
+        var previewLevel: Float?
+        var isDark: Bool
+        var scale: CGFloat
+    }
 
     var body: some View {
+        let inputs = DrawInputs(style: style, showTrackpad: showTrackpad, previewLevel: previewLevel,
+                                isDark: colorScheme == .dark, scale: displayScale)
         GeometryReader { geo in
             TimelineView(.animation(minimumInterval: model.saver ? 1.0 / 30 : 1.0 / 60, paused: !model.isAnimating)) { tl in
                 Canvas(rendersAsynchronously: false) { ctx, size in
@@ -1083,6 +1101,7 @@ struct KeyboardVisualizer: View {
             .contentShape(Rectangle())
             .onTapGesture(count: 1, coordinateSpace: .local) { p in
                 guard interactive else { return }
+                onTap?()
                 let lay = VizLayout(size: geo.size, trackpad: showTrackpad, kind: kind)
                 if let cap = lay.cap(at: p) {
                     model.triggerKey(cap.keyCode, now: hostNow())
@@ -1106,6 +1125,10 @@ struct KeyboardVisualizer: View {
             model.start()
         }
         .onDisappear { model.stop() }
+        .onChange(of: inputs) { _, _ in
+            model.configure(style: style, showTrackpad: showTrackpad, previewLevel: previewLevel)
+            model.wake()
+        }
         .onChange(of: trigger) { _, t in
             guard let t else { return }
             model.triggerKey(t.keyCode, now: hostNow())

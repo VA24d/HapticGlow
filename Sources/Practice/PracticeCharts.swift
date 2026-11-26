@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-only
+// Copyright 2026 Vijay A. HapticGlow: https://github.com/VA24d/HapticGlow
+// Additional attribution terms under GPLv3 section 7(b): see NOTICE.md.
 // Practice visuals: WPM-over-time chart and the per-key heatmap (read-only use of KeyLayout.caps).
 import SwiftUI
 

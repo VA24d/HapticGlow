@@ -69,10 +69,10 @@ cp NOTICE.md "$APP/Contents/Resources/NOTICE.md"
 SIGN_ID="${HAPTICGLOW_SIGN_ID:-HapticGlow Local Signing}"
 if security find-identity -p codesigning 2>/dev/null | grep -q "\"$SIGN_ID\""; then
   echo "› signing ($SIGN_ID)"
-  codesign --force --sign "$SIGN_ID" --options runtime --timestamp=none "$APP" >/dev/null
+  codesign --force --sign "$SIGN_ID" --options runtime --entitlements Resources/HapticGlow.entitlements --timestamp=none "$APP" >/dev/null
 else
   echo "› signing (ad-hoc; permissions reset on every rebuild - see README)"
-  codesign --force --sign - --options runtime --timestamp=none "$APP" >/dev/null
+  codesign --force --sign - --options runtime --entitlements Resources/HapticGlow.entitlements --timestamp=none "$APP" >/dev/null
 fi
 
 if [ "$MODE" = "install" ]; then

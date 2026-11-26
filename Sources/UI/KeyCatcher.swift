@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-only
+// Copyright 2026 Vijay A. HapticGlow: https://github.com/VA24d/HapticGlow
+// Additional attribution terms under GPLv3 section 7(b): see NOTICE.md.
 // Focusable key sink for in-app typing (Try It, Typing Practice).
 //
 // SwiftUI views do not handle keyDown, so AppKit walks the responder chain, finds nobody, and plays
@@ -20,16 +23,20 @@ struct KeyCatcher: NSViewRepresentable {
     var active: Bool = true
     var onKey: (KeyCatcherEvent) -> Void
     var onFocusChange: (Bool) -> Void = { _ in }
+    /// Bump to take focus again (for example after a click on the surrounding view).
+    var refocus: Int = 0
 
     func makeNSView(context: Context) -> CatcherView {
         let v = CatcherView()
         v.onKey = onKey; v.onFocusChange = onFocusChange; v.wantsActive = active
+        v.lastRefocus = refocus
         return v
     }
 
     func updateNSView(_ v: CatcherView, context: Context) {
         v.onKey = onKey; v.onFocusChange = onFocusChange
         if v.wantsActive != active { v.wantsActive = active }
+        if v.lastRefocus != refocus { v.lastRefocus = refocus; v.takeFocus() }
     }
 
     final class CatcherView: NSView {
@@ -41,6 +48,7 @@ struct KeyCatcher: NSViewRepresentable {
                 else if window?.firstResponder === self { window?.makeFirstResponder(nil) }
             }
         }
+        var lastRefocus = 0
         private var keyObs: NSObjectProtocol?
 
         override var acceptsFirstResponder: Bool { wantsActive }
@@ -56,6 +64,14 @@ struct KeyCatcher: NSViewRepresentable {
                 MainActor.assumeIsolated { self?.claimFocus() }
             }
             claimFocus()
+        }
+
+        /// Explicit request: takes focus even from a text field.
+        func takeFocus() {
+            DispatchQueue.main.async { [weak self] in
+                guard let self, self.wantsActive, let w = self.window, w.firstResponder !== self else { return }
+                w.makeFirstResponder(self)
+            }
         }
 
         func claimFocus() {

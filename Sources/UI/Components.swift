@@ -1,4 +1,12 @@
-// Shared UI building blocks. Names are FROZEN (both UI agents use them); styling may be refined.
+// SPDX-License-Identifier: GPL-3.0-only
+// Copyright 2026 Vijay A. HapticGlow: https://github.com/VA24d/HapticGlow
+// Additional attribution terms under GPLv3 section 7(b): see NOTICE.md.
+// Shared UI building blocks.
+
+/// True when the app runs in the screenshot mode driven by HAPTICGLOW_SNAPSHOT_DIR.
+enum SnapshotMode {
+    static let active = ProcessInfo.processInfo.environment["HAPTICGLOW_SNAPSHOT_DIR"] != nil
+}
 import SwiftUI
 import AppKit
 

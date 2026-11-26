@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-only
+// Copyright 2026 Vijay A. HapticGlow: https://github.com/VA24d/HapticGlow
+// Additional attribution terms under GPLv3 section 7(b): see NOTICE.md.
 // HapticGlow — keyboard glow renderer (240 Hz music / 60 Hz ambient) with every GlowMode.
 //
 // All shapes are computed in PERCEIVED brightness (0...1, roughly lightness) and mapped to the

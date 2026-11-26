@@ -13,7 +13,7 @@ As permitted by section 7(b) of the GNU General Public License version 3, the fo
 >
 > **HapticGlow by Vijay A (https://github.com/VA24d/HapticGlow)**
 >
-> The notice must appear in three places: in the README (or the main description page) of the project that distributes the work, in a NOTICE file shipped with the source and with any binary release, and in the "About" window or equivalent legal-notices screen of the application, if it has one.
+> Copies and forks of HapticGlow must keep this NOTICE.md and the notice in it. A work based on HapticGlow must preserve the notice in its own legal notices (a NOTICE file shipped with the source and any binary release) and in the "About" window or equivalent Appropriate Legal Notices screen of the application, if it has one.
 >
 > You may add your own copyright line for your changes next to this notice. You may not remove it, hide it, or present the work as written solely by someone else.
 
@@ -32,8 +32,8 @@ The recorded mechanical key sounds in `Sounds/` come from kbsim (Mechanical Keyb
 Parts of the source were written with reference to, or adapted from, the projects below. Their copyright lines and the MIT permission notice are reproduced here as that license requires. MIT code can be included in a GPLv3 program.
 
 - MagicKey, Copyright (c) 2026 XiaoSong1223: Core Audio process tap, onset detector, keyboard backlight driver and state guard, light effects.
-- nospeaker, Copyright (c) 2024 os6 (Cody Collier): the method for driving the Force Touch trackpad motor with synthesized waveforms.
-- Thock, by kamillobinski: key layout, stereo pan law by key position, soft clipping at the output.
+- nospeaker, Copyright (c) 2026 Cody Collier (os6): the method for driving the Force Touch trackpad motor with synthesized waveforms.
+- Thock, Copyright (c) 2025 Kamil Łobiński (kamillobinski): key layout, stereo pan law by key position, soft clipping at the output.
 
 ```
 MIT License

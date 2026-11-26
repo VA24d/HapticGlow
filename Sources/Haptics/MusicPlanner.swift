@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-only
+// Copyright 2026 Vijay A. HapticGlow: https://github.com/VA24d/HapticGlow
+// Additional attribution terms under GPLv3 section 7(b): see NOTICE.md.
 // HapticGlow - music-mode planner (Apple Music Haptics-style layering on the Force Touch trackpad).
 //
 // Pure logic, no motor access: `tick` is called by HapticEngine's realtime loop (and by the offline

@@ -15,7 +15,7 @@
 </p>
 
 <p align="center">
-  <a href="LICENSE.md"><img alt="License: GPL-3.0-only" src="https://img.shields.io/badge/license-GPL--3.0-blue"></a>
+  <a href="LICENSE.md"><img alt="License: GPL-3.0-only" src="https://img.shields.io/badge/license-GPL--3.0--only-blue"></a>
   <img alt="macOS 26+" src="https://img.shields.io/badge/macOS-26%2B-lightgrey">
   <img alt="Apple Silicon" src="https://img.shields.io/badge/Apple%20Silicon-arm64-lightgrey">
   <a href="https://github.com/VA24d/HapticGlow/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/VA24d/HapticGlow/actions/workflows/ci.yml/badge.svg"></a>
@@ -118,6 +118,6 @@ HapticGlow adapts code from MagicKey (XiaoSong1223), nospeaker (Cody Collier / o
 
 ## License
 
-HapticGlow is licensed under the GNU General Public License, version 3 only ([LICENSE.md](LICENSE.md)), with an attribution term under section 7(b) in [NOTICE.md](NOTICE.md): redistributions of HapticGlow or derivative works must keep **"HapticGlow by Vijay A (https://github.com/VA24d/HapticGlow)"** visible in the README, in a `NOTICE` file, and in the About window if present.
+HapticGlow is licensed under the GNU General Public License, version 3 only ([LICENSE.md](LICENSE.md)), with an attribution term under section 7(b) in [NOTICE.md](NOTICE.md): copies and forks keep `NOTICE.md` and the notice **"HapticGlow by Vijay A (https://github.com/VA24d/HapticGlow)"**. Works based on HapticGlow preserve that notice in their legal notices, in a `NOTICE` file, and in any About or legal-notices screen.
 
 The sound files in `Sounds/` remain under the MIT License ([Sounds/LICENSE-kbsim.txt](Sounds/LICENSE-kbsim.txt)). Usage terms are in [TERMS.md](TERMS.md).

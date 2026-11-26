@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-only
+// Copyright 2026 Vijay A. HapticGlow: https://github.com/VA24d/HapticGlow
+// Additional attribution terms under GPLv3 section 7(b): see NOTICE.md.
 // Settings: startup, menu bar, appearance, sensitivity, recovery, credits.
 import SwiftUI
 import ServiceManagement
@@ -120,7 +123,7 @@ struct SettingsView: View {
                 group("Credits", divided: false) {
                     credit("MagicKey", "XiaoSong1223", "Keyboard backlight control approach")
                     credit("nospeaker", "Cody Collier (os6)", "Trackpad haptic actuation")
-                    credit("kbsim", "tplai", "Mechanical keyboard sound samples")
+                    credit("kbsim", "Thomas Lai (tplai)", "Mechanical keyboard sound samples")
                     credit("Thock", "kamillobinski", "Key sound engine ideas")
                     Text("All four are MIT licensed. Their copyright notices and license texts apply to the portions derived from them.")
                         .font(Theme.Font.caption).foregroundStyle(Theme.textTertiary)
@@ -132,7 +135,7 @@ struct SettingsView: View {
                         Text("HapticGlow by Vijay A").font(Theme.Font.label).foregroundStyle(Theme.textPrimary)
                         Spacer()
                         Text(appVersion).font(Theme.Font.caption).foregroundStyle(Theme.textSecondary)
-                        Text("GPL-3.0")
+                        Text("GPL-3.0-only")
                             .font(.system(size: 10, weight: .medium))
                             .foregroundStyle(Theme.textSecondary)
                             .padding(.horizontal, 5).padding(.vertical, 1)
@@ -143,9 +146,13 @@ struct SettingsView: View {
                             .font(Theme.Font.caption)
                             .foregroundStyle(Theme.accent)
                     }
-                    Text("Key sounds: kbsim by Thomas Lai (MIT)")
-                        .font(Theme.Font.caption)
-                        .foregroundStyle(Theme.textTertiary)
+                    Group {
+                        Text("Copyright 2026 Vijay A")
+                        Text("HapticGlow comes with no warranty. See LICENSE.md and NOTICE.md in the app bundle.")
+                        Text("Key sounds: kbsim by Thomas Lai (tplai), MIT")
+                    }
+                    .font(Theme.Font.caption)
+                    .foregroundStyle(Theme.textTertiary)
                 }
             }
             .controlSize(.small)
@@ -154,6 +161,9 @@ struct SettingsView: View {
         .onAppear { refreshLogin(clearMessage: true) }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             refreshLogin(clearMessage: true)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSWindow.didBecomeKeyNotification)) { _ in
+            refreshLogin(clearMessage: false)
         }
     }
 
@@ -190,7 +200,7 @@ struct SettingsView: View {
                 try SMAppService.mainApp.unregister()
             }
         } catch {
-            loginError = "Could not change login item. Move HapticGlow to Applications and try again."
+            loginError = "Could not change login item: \(error.localizedDescription)"
             Log.write("login item change failed: \(error)")
         }
         refreshLogin(clearMessage: false)

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-only
+// Copyright 2026 Vijay A. HapticGlow: https://github.com/VA24d/HapticGlow
+// Additional attribution terms under GPLv3 section 7(b): see NOTICE.md.
 // AudioAnalyzer: low-latency music analysis (Accelerate/vDSP). Public API is frozen.
 //
 // Credits: the per-sample kick onset path (RBJ low-pass, 3 ms / 90 ms envelope, 500 ms moving
@@ -15,6 +18,7 @@
 import Foundation
 import Accelerate
 import AVFoundation
+import Synchronization
 
 // MARK: - Core (one instance per stream; not thread safe, owner serialises)
 
@@ -60,8 +64,8 @@ final class AnalyzerCore {
     private var hopOnsetStr: Float = 0
     private var lastFrame = AudioFeatures()
     private(set) var fastMs: Double = 0
-    /// Read on the IO thread once per half hop; written rarely from other threads (a plain Bool, benign race).
-    nonisolated(unsafe) static var fastOnsetEnabled = true
+    /// Read on the IO thread once per half hop; written only from setOnsetDemand and the power observer.
+    static let fastOnsetEnabled = Atomic<Bool>(true)
     private let frame: UnsafeMutablePointer<Float>       // last 2048 samples, linear
     private let win: UnsafeMutablePointer<Float>
     private let tmp: UnsafeMutablePointer<Float>
@@ -317,7 +321,7 @@ final class AnalyzerCore {
             if hopFill == hopHalf {
                 // The half-hop scan only publishes onsets 128 samples earlier; with it off the whole hop is
                 // scanned in runHop (same detector, same work, one publish less per onset).
-                if AnalyzerCore.fastOnsetEnabled {
+                if AnalyzerCore.fastOnsetEnabled.load(ordering: .relaxed) {
                     pendingAfter = count - i
                     fastHalf()
                 }
@@ -846,12 +850,12 @@ final class AnalyzerCore {
             let fr = lag - Float(k)
             return acv[k] * (1 - fr) + acv[k + 1] * fr
         }
-        let w: [Float] = [1.0, 0.85, 0.6, 0.8]
+        @inline(__always) func wt(_ i: Int) -> Float { i == 0 ? 1.0 : (i == 1 ? 0.85 : (i == 2 ? 0.6 : 0.8)) }
         var bestS: Float = 0, bestL: Float = 0, sumS: Float = 0, nS: Float = 0
         var L: Float = 33
         while L <= 86 {
             var s: Float = 0, ws: Float = 0
-            for m in 1...4 { s += w[m - 1] * ac(Float(m) * L); ws += w[m - 1] }
+            for m in 1...4 { s += wt(m - 1) * ac(Float(m) * L); ws += wt(m - 1) }
             s /= ws
             let bpm = 6000 / L
             let prior = expf(-0.5 * powf(log2f(bpm / 115) / 1.0, 2))
@@ -937,14 +941,13 @@ final class AudioAnalyzer: @unchecked Sendable {
         let d = demand.get()
         let glowNeed = d.glowExplicit ? d.glow : (GlowEngine.shared.status == .running)
         let hapticsNeed = d.hapticsExplicit ? d.haptics : (HapticEngine.shared.status == .running)
-        AnalyzerCore.fastOnsetEnabled = !PowerState.shared.saver || glowNeed || hapticsNeed
+        AnalyzerCore.fastOnsetEnabled.store(!PowerState.shared.saver || glowNeed || hapticsNeed, ordering: .relaxed)
     }
 
     private let core = AnalyzerCore(live: true, sampleRate: 48000)
     private var lastRate: Double = 48000
-    private var resetFlag = false
-    private var timeMs: Double = 0
-    private var demandCheck = 0
+    private let resetFlag = Atomic<Bool>(false)
+    private let timeBits = Atomic<UInt64>(0)
 
     private init() {
         _ = Self.powerWatch
@@ -954,26 +957,21 @@ final class AudioAnalyzer: @unchecked Sendable {
     /// Realtime entry point (CoreAudio IO thread). Buffers internally, runs one analysis hop per
     /// 256 samples, and publishes each frame via FeatureBus.shared.publish(_:).
     func process(_ samples: UnsafePointer<Float>, count: Int, sampleRate: Double) {
-        if resetFlag { resetFlag = false; core.resetState() }
+        if resetFlag.exchange(false, ordering: .relaxed) { core.resetState() }
         if sampleRate != lastRate && sampleRate > 0 {
             lastRate = sampleRate
             core.configure(sampleRate: sampleRate)
             core.resetState()
         }
-        demandCheck &+= count
-        if demandCheck >= Int(lastRate) {
-            demandCheck = 0
-            if !Self.demand.get().hapticsExplicit { Self.refreshFastPath() }
-        }
         core.process(samples, count: count)
-        timeMs = core.avgHopMs
+        timeBits.store(core.avgHopMs.bitPattern, ordering: .relaxed)
     }
 
     /// Clear all state (AGC, onset history, BPM).
-    func reset() { resetFlag = true }
+    func reset() { resetFlag.store(true, ordering: .relaxed) }
 
     /// Average CPU time per hop in milliseconds (diagnostics).
-    var processingTimeMs: Double { timeMs }
+    var processingTimeMs: Double { Double(bitPattern: timeBits.load(ordering: .relaxed)) }
 
     /// Offline analysis of an audio file as fast as possible (decoded to mono). Does NOT publish to
     /// FeatureBus. `time` fields are seconds from file start. Used by `--probe-audio` and tuning.

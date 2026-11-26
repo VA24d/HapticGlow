@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-only
+// Copyright 2026 Vijay A. HapticGlow: https://github.com/VA24d/HapticGlow
+// Additional attribution terms under GPLv3 section 7(b): see NOTICE.md.
 // Sidebar: app header with running dot, three sections, per-engine status dots.
 import SwiftUI
 
@@ -10,7 +13,7 @@ struct SidebarView: View {
     }
 
     var body: some View {
-        List(selection: selection) {
+        List(selection: SnapshotMode.active ? .constant(nil) : selection) {
             ForEach(Self.sections, id: \.self) { name in
                 Section(name) {
                     ForEach(SidebarItem.allCases.filter { $0.section == name }) { item in
@@ -29,6 +32,12 @@ struct SidebarView: View {
             Spacer(minLength: 6)
             if let s = status(item) { StatusDot(status: s, size: 6) }
         }
+        // Offscreen captures draw the system selection as a black pill, so snapshots paint their own.
+        .listRowBackground(
+            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                .fill(SnapshotMode.active && model.selection == item ? Theme.accent.opacity(0.25) : Color.clear)
+                .padding(.horizontal, 6)
+        )
     }
 
     private func status(_ item: SidebarItem) -> EngineStatus? {

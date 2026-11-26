@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-only
+// Copyright 2026 Vijay A. HapticGlow: https://github.com/VA24d/HapticGlow
+// Additional attribution terms under GPLv3 section 7(b): see NOTICE.md.
 // Typing test engine: pure value logic (no UI, no clock). Time is passed in as seconds so it is testable.
 // Word model follows the Monkeytype convention: Space commits a word, extra characters are allowed
 // (and shown), Backspace edits the current word, and an incorrect committed word can be re-entered.

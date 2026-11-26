@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-only
+// Copyright 2026 Vijay A. HapticGlow: https://github.com/VA24d/HapticGlow
+// Additional attribution terms under GPLv3 section 7(b): see NOTICE.md.
 // Low-latency spatial key-sound engine.
 //
 // Credits: sound packs are from kbsim (MIT, tplai, https://github.com/tplai/kbsim); see Sounds/CREDITS.md.
@@ -21,6 +24,14 @@ import Observation
 import Synchronization
 
 // MARK: - Realtime core
+
+/// Render-thread counters, readable from any thread (Double values stored as bit patterns).
+private final class RTStats: @unchecked Sendable {
+    let latencyBits = Atomic<UInt64>(0)
+    let delayBits = Atomic<UInt64>(0)
+    let events = Atomic<UInt64>(0)
+    let buffers = Atomic<UInt64>(0)
+}
 
 private struct RTEvent {
     var ptr: UnsafePointer<Float>? = nil
@@ -88,9 +99,10 @@ private final class RT: @unchecked Sendable {
     var seq: UInt64 = 0
     /// Seconds per mach tick.
     let tickSec: Double
-    // Stats written by render thread, read by anyone (benign races on aligned Doubles).
-    let stats: UnsafeMutablePointer<Double>  // 0 latency(ts), 1 callback delay, 2 events, 3 buffers (may be shared)
-    private let ownsStats: Bool
+    // Stats written by the render thread, read by anyone (may be shared between instances).
+    fileprivate let stats: RTStats
+    /// Gain applied after the soft clip (system volume compensation), so boosted peaks are not squashed.
+    let postGain = Atomic<UInt32>(Float(1).bitPattern)
     // Speaker tuning (per channel: band-pass, harmonic high-pass, low shelf). Configured only while stopped.
     private let tuneState = UnsafeMutablePointer<Biquad>.allocate(capacity: 6)
     private var tune = false
@@ -98,19 +110,17 @@ private final class RT: @unchecked Sendable {
     static let scratchCap = 16384
     private let scratch = UnsafeMutablePointer<Float>.allocate(capacity: RT.scratchCap)
 
-    init(stats shared: UnsafeMutablePointer<Double>? = nil) {
+    fileprivate init(stats shared: RTStats? = nil) {
         ring.initialize(repeating: RTEvent(), count: RT.ringCap)
         voices.initialize(repeating: Voice(), count: RT.totalVoices)
         tuneState.initialize(repeating: Biquad(), count: 6)
         scratch.initialize(repeating: 0, count: RT.scratchCap)
-        if let shared { stats = shared; ownsStats = false }
-        else { stats = .allocate(capacity: 4); stats.initialize(repeating: 0, count: 4); ownsStats = true }
+        stats = shared ?? RTStats()
         var tb = mach_timebase_info_data_t(); mach_timebase_info(&tb)
         tickSec = Double(tb.numer) / Double(tb.denom) / 1e9
     }
     deinit {
         ring.deallocate(); voices.deallocate(); tuneState.deallocate(); scratch.deallocate()
-        if ownsStats { stats.deallocate() }
     }
 
     /// Configure speaker tuning for `rate`. Only call while the render callback is stopped.
@@ -182,13 +192,13 @@ private final class RT: @unchecked Sendable {
                 h &+= 1
                 startVoice(e)
                 let ts = hostTime != 0 ? hostTime : nowTicks
-                stats[0] = Double(ts) * tickSec - e.time
-                stats[1] = Double(nowTicks) * tickSec - e.time
-                stats[2] += 1
+                stats.latencyBits.store((Double(ts) * tickSec - e.time).bitPattern, ordering: .relaxed)
+                stats.delayBits.store((Double(nowTicks) * tickSec - e.time).bitPattern, ordering: .relaxed)
+                stats.events.wrappingAdd(1, ordering: .relaxed)
             }
             head.store(h, ordering: .releasing)
         }
-        stats[3] += 1
+        stats.buffers.wrappingAdd(1, ordering: .relaxed)
 
         // 2. mix
         var any = false
@@ -247,6 +257,11 @@ private final class RT: @unchecked Sendable {
         // 4. Thock soft clip (knee 0.7, asymptote -1 dBFS)
         for n in 0..<frames { left[n] = RT.softClip(left[n]) }
         if channels > 1 { for n in 0..<frames { right[n] = RT.softClip(right[n]) } }
+        let pg = Float(bitPattern: postGain.load(ordering: .relaxed))
+        if pg != 1 {
+            for n in 0..<frames { left[n] *= pg }
+            if channels > 1 { for n in 0..<frames { right[n] *= pg } }
+        }
         return true
     }
 
@@ -283,6 +298,8 @@ private final class PackData: @unchecked Sendable {
     var bytes: Int { slabCount * 4 }
 }
 
+/// Key-sound settings. Packed into one 64-bit word (three 16-bit fixed-point 0...1 values plus flags) so the
+/// UI thread can publish a whole snapshot with a single atomic store and the key thread reads it without a lock.
 private struct CfgPOD {
     var enabled = true
     var volume: Float = 0.7
@@ -290,6 +307,24 @@ private struct CfgPOD {
     var pitchVar: Float = 0.5
     var release = true
     var modifiers = true
+
+    init(enabled: Bool = true, volume: Float = 0.7, spatial: Float = 0.8, pitchVar: Float = 0.5,
+         release: Bool = true, modifiers: Bool = true) {
+        self.enabled = enabled; self.volume = volume; self.spatial = spatial; self.pitchVar = pitchVar
+        self.release = release; self.modifiers = modifiers
+    }
+
+    private static func q(_ v: Float) -> UInt64 { UInt64((max(0, min(1, v)) * 65535).rounded()) }
+    private static func d(_ b: UInt64) -> Float { Float(b & 0xFFFF) / 65535 }
+
+    var bits: UInt64 {
+        Self.q(volume) | Self.q(spatial) << 16 | Self.q(pitchVar) << 32
+            | (enabled ? 1 << 48 : 0) | (release ? 1 << 49 : 0) | (modifiers ? 1 << 50 : 0)
+    }
+    init(bits b: UInt64) {
+        volume = Self.d(b); spatial = Self.d(b >> 16); pitchVar = Self.d(b >> 32)
+        enabled = b & (1 << 48) != 0; release = b & (1 << 49) != 0; modifiers = b & (1 << 50) != 0
+    }
 }
 
 private func devProp<T: BitwiseCopyable>(_ dev: AudioObjectID, _ sel: AudioObjectPropertySelector,
@@ -397,9 +432,7 @@ final class KeySoundEngine: @unchecked Sendable {
         ("mxbrown", "Cherry MX Brown", "Gentle"), ("alpaca", "Alpaca", "Quiet"),
     ]
 
-    private let sharedStats: UnsafeMutablePointer<Double> = {
-        let p = UnsafeMutablePointer<Double>.allocate(capacity: 4); p.initialize(repeating: 0, count: 4); return p
-    }()
+    private let sharedStats = RTStats()
     private let rt: RT
     private let laneRT: [RT]
     /// 0 = plain stereo path, 1 = spatial lanes. Written on ctl while stopped, read by producers.
@@ -412,9 +445,9 @@ final class KeySoundEngine: @unchecked Sendable {
     /// Producer gain for spatial lanes; set on ctl before `mode` flips to 1 (release/acquire pairs it).
     private var laneGain: Float = SpatialChain.laneTrim
     private let routeBox = Locked(KeySoundRoute())
-    private let cfg: UnsafeMutablePointer<CfgPOD> = {
-        let p = UnsafeMutablePointer<CfgPOD>.allocate(capacity: 1); p.initialize(to: CfgPOD()); return p
-    }()
+    private let cfgBits = Atomic<UInt64>(CfgPOD().bits)
+    private var cfgNow: CfgPOD { CfgPOD(bits: cfgBits.load(ordering: .acquiring)) }
+    private func setCfg(_ c: CfgPOD) { cfgBits.store(c.bits, ordering: .releasing) }
     private let ctl = DispatchQueue(label: "HapticGlow.KeySound.ctl", qos: .userInitiated)
     private let statusBox = Locked<EngineStatus>(.stopped)
     private let packsBox = Locked<[SoundPack]?>(nil)
@@ -424,6 +457,7 @@ final class KeySoundEngine: @unchecked Sendable {
     private let packBits = Atomic<Int>(0)
     private var currentPack: PackData?
     private var retired: [(PackData, Double)] = []
+    private var prunePending = false
 
     // Producer-side state, serialised by `spin`.
     private let spin = Atomic<Bool>(false)
@@ -471,11 +505,11 @@ final class KeySoundEngine: @unchecked Sendable {
         SpatialSettings.shared.onChange = { [weak self] in self?.scheduleRebuild() }
     }
 
-    var lastLatencyMs: Double { max(0, sharedStats[0] * 1000) }
+    var lastLatencyMs: Double { max(0, Double(bitPattern: sharedStats.latencyBits.load(ordering: .relaxed)) * 1000) }
     /// Delay between event capture and the render callback that picked it up (excludes output buffer).
-    var lastCallbackDelayMs: Double { max(0, sharedStats[1] * 1000) }
+    var lastCallbackDelayMs: Double { max(0, Double(bitPattern: sharedStats.delayBits.load(ordering: .relaxed)) * 1000) }
     var outputBufferFrames: Int { bufFrames }
-    var renderedEvents: Int { Int(sharedStats[2]) }
+    var renderedEvents: Int { Int(truncatingIfNeeded: sharedStats.events.load(ordering: .relaxed)) }
 
     private static func discoverPacks() -> [SoundPack] {
         let fm = FileManager.default
@@ -563,10 +597,10 @@ final class KeySoundEngine: @unchecked Sendable {
 
     /// Thread-safe; switching pack loads it off the realtime path.
     func update(_ c: SoundConfig) {
-        cfg.pointee = CfgPOD(enabled: c.enabled, volume: max(0, min(1, c.volume)),
-                             spatial: max(0, min(1, c.spatial)), pitchVar: max(0, min(1, c.pitchVariation)),
-                             release: c.releaseSounds, modifiers: c.modifierSounds)
-        let spread = cfg.pointee.spatial
+        setCfg(CfgPOD(enabled: c.enabled, volume: max(0, min(1, c.volume)),
+                      spatial: max(0, min(1, c.spatial)), pitchVar: max(0, min(1, c.pitchVariation)),
+                      release: c.releaseSounds, modifiers: c.modifierSounds))
+        let spread = cfgNow.spatial
         ctl.async { [self] in
             if spread != lastSpread { lastSpread = spread; chain?.setSpread(spread) }
         }
@@ -594,12 +628,21 @@ final class KeySoundEngine: @unchecked Sendable {
 
     // MARK: Engine build & system volume compensation (ctl queue)
 
-    static let maxSystemCompDB: Float = 30
-    static let maxSystemCompGain: Float = powf(10, 30.0 / 20.0)
+    /// Boost applied after the soft clip. The soft clip keeps peaks under ~0.9, so +12 dB leaves at most ~3.6
+    /// before the system volume stage (which is below 0.25 whenever the boost is at its cap). Devices that
+    /// clamp floats before applying volume would clip only the loudest clicks; a larger boost would clip
+    /// ordinary ones. Below 25% system volume the clicks get quieter instead of louder.
+    static let maxSystemCompDB: Float = 12
+    static let maxSystemCompGain: Float = powf(10, 12.0 / 20.0)
 
     private var systemCompensation: Float {
         get { Float(bitPattern: sysGainBits.load(ordering: .acquiring)) }
-        set { sysGainBits.store(newValue.bitPattern, ordering: .releasing) }
+        set {
+            sysGainBits.store(newValue.bitPattern, ordering: .releasing)
+            let bits = newValue.bitPattern
+            rt.postGain.store(bits, ordering: .releasing)
+            for l in laneRT { l.postGain.store(bits, ordering: .releasing) }
+        }
     }
 
     /// Compensates key-sound gain for macOS output `volume` (0...1).
@@ -683,6 +726,7 @@ final class KeySoundEngine: @unchecked Sendable {
         }
         if let e = engine { e.stop(); engine = nil }
         chain = nil
+        retired.removeAll()   // renderer stopped: nothing can still read a retired pack
     }
 
     private func defaultOutputDevice() -> AudioObjectID {
@@ -754,12 +798,12 @@ final class KeySoundEngine: @unchecked Sendable {
 
         if useSpatial {
             let lanes = laneRT
-            let ch = SpatialChain(engine: eng, rate: rate, kind: out.kind, spread: cfg.pointee.spatial) { lane, frames, buf in
+            let ch = SpatialChain(engine: eng, rate: rate, kind: out.kind, spread: cfgNow.spatial) { lane, frames, buf in
                 lanes[lane].renderMono(frames: frames, hostTime: 0, buf: buf)
             }
             chain = ch
             laneGain = SpatialChain.trim(for: out.kind)
-            lastSpread = cfg.pointee.spatial
+            lastSpread = cfgNow.spatial
             mode.store(1, ordering: .releasing)
         } else {
             let core = rt
@@ -854,8 +898,24 @@ final class KeySoundEngine: @unchecked Sendable {
         if let old = currentPack { retired.append((old, hostNow())) }
         currentPack = pk
         packBits.store(Int(bitPattern: Unmanaged.passUnretained(pk).toOpaque()), ordering: .releasing)
+        pruneRetiredLocked()
+        schedulePruneLocked()
+    }
+
+    private func pruneRetiredLocked() {
         let now = hostNow()
-        retired.removeAll { now - $0.1 > 3 && true }
+        retired.removeAll { now - $0.1 > 3 }
+    }
+
+    /// Retired packs outlive the longest voice by 3 s; free them shortly after that even if no pack loads again.
+    private func schedulePruneLocked() {
+        guard !retired.isEmpty, !prunePending else { return }
+        prunePending = true
+        ctl.asyncAfter(deadline: .now() + 3.1) { [self] in
+            prunePending = false
+            pruneRetiredLocked()
+            schedulePruneLocked()
+        }
     }
 
     /// Decodes all 14 samples, trims MP3 lead-in silence, fades tails, packs into one slab.
@@ -945,7 +1005,7 @@ final class KeySoundEngine: @unchecked Sendable {
     }
 
     fileprivate func handle(_ e: KeyEvent, force: Bool) {
-        let c = cfg.pointee
+        let c = cfgNow
         guard force || c.enabled else { return }
         if e.isRepeat { return }
         lastKeyBits.store(hostNow().bitPattern, ordering: .releasing)
@@ -1004,7 +1064,7 @@ final class KeySoundEngine: @unchecked Sendable {
             if e.keyCode == lastDownCode && e.time - lastDownTime < 0.08 { gain *= 0.9 + 0.1 * rand() }
             lastDownCode = e.keyCode; lastDownTime = e.time
         } else { gain *= 0.55 }
-        let g = gain * c.volume * comp
+        let g = gain * c.volume
         if mode.load(ordering: .acquiring) == 1 {
             let lane = SpatialGeometry.lane(forX: x, isSpace: e.kind == .space)
             laneRT[lane].push(RTEvent(ptr: UnsafePointer(pk.slab + pk.off[idx]), len: len, rate: powf(2, pitch / 12),
@@ -1034,18 +1094,18 @@ final class KeySoundEngine: @unchecked Sendable {
                             totalMs: Double, tuned: Bool, spread: Float = 0.8, volume: Float? = nil,
                             systemVolume: Float? = nil, systemMuted: Bool = false) -> (l: [Float], r: [Float])? {
         ctl.sync {
-            let oldVol = cfg.pointee.volume
+            let oldCfg = cfgNow
             let oldComp = systemCompensation
-            if let volume { cfg.pointee.volume = volume }
+            if let volume { var c = oldCfg; c.volume = volume; setCfg(c) }
             systemCompensation = (systemVolume != nil || systemMuted)
                 ? Self.volumeCompensation(volume: systemVolume ?? 1, muted: systemMuted)
                 : 1
-            defer { cfg.pointee.volume = oldVol; systemCompensation = oldComp }
+            defer { var c = cfgNow; c.volume = oldCfg.volume; setCfg(c); systemCompensation = oldComp }
             loadPackLocked(packID.get(), rate: rate)
             rt.resetForRestart(); for l in laneRT { l.resetForRestart() }
             rt.configureTuning(rate: rate, enabled: tuned)
             for l in laneRT { l.configureTuning(rate: rate, enabled: tuned) }
-            cfg.pointee.spatial = spread
+            var cs = cfgNow; cs.spatial = spread; setCfg(cs)
             let lanes = laneRT, core = rt
             var ch: SpatialChain?
             var plain: AVAudioEngine?

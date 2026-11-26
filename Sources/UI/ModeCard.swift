@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-only
+// Copyright 2026 Vijay A. HapticGlow: https://github.com/VA24d/HapticGlow
+// Additional attribution terms under GPLv3 section 7(b): see NOTICE.md.
 // Selectable option cards used by the Glow, Haptics and Sounds screens.
 import SwiftUI
 
@@ -17,6 +20,8 @@ struct ChoiceCard<Preview: View>: View {
     var symbol: String? = nil
     var selected: Bool
     var minHeight: CGFloat = 0
+    /// Role badge shown by the caller (for example "Music"); spoken as part of the value.
+    var badge: String? = nil
     var action: () -> Void
     @ViewBuilder var preview: Preview
     @State private var hover = false
@@ -64,13 +69,16 @@ struct ChoiceCard<Preview: View>: View {
         .buttonStyle(CardPressStyle())
         .onHover { h in withAnimation(Theme.snappy) { hover = h } }
         .accessibilityLabel(title)
+        .accessibilityValue([badge, subtitle].compactMap { $0 }.joined(separator: ". "))
         .accessibilityAddTraits(selected ? [.isSelected] : [])
     }
 }
 
 extension ChoiceCard where Preview == EmptyView {
-    init(title: String, subtitle: String? = nil, symbol: String? = nil, selected: Bool, minHeight: CGFloat = 0, action: @escaping () -> Void) {
-        self.init(title: title, subtitle: subtitle, symbol: symbol, selected: selected, minHeight: minHeight, action: action) { EmptyView() }
+    init(title: String, subtitle: String? = nil, symbol: String? = nil, selected: Bool, minHeight: CGFloat = 0,
+         badge: String? = nil, action: @escaping () -> Void) {
+        self.init(title: title, subtitle: subtitle, symbol: symbol, selected: selected, minHeight: minHeight,
+                  badge: badge, action: action) { EmptyView() }
     }
 }
 
@@ -94,7 +102,8 @@ struct ModeCard: View {
 
     var body: some View {
         let info = GlowModeInfo.info(mode)
-        ChoiceCard(title: info.title, subtitle: info.subtitle, symbol: info.symbol, selected: selected, action: action) {
+        ChoiceCard(title: info.title, subtitle: info.subtitle, symbol: info.symbol, selected: selected,
+                   badge: selected ? badge : nil, action: action) {
             ModePreviewStrip(mode: mode)
                 .frame(height: 26)
         }
@@ -107,6 +116,7 @@ struct ModeCard: View {
                     .background(Theme.accent.opacity(0.12), in: Capsule())
                     .padding(.top, 11).padding(.trailing, 28)
                     .allowsHitTesting(false)
+                    .accessibilityHidden(true)
             }
         }
     }
