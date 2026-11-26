@@ -1,0 +1,54 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Typecheck and build
+    runs-on: macos-26
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select Xcode
+        run: |
+          # Use the newest installed Xcode, which carries the newest Swift toolchain.
+          latest="$(ls -d /Applications/Xcode_*.app 2>/dev/null | sort -V | tail -n 1)"
+          if [ -n "$latest" ]; then sudo xcode-select -s "$latest/Contents/Developer"; fi
+          xcode-select -p
+          swift --version
+
+      - name: Typecheck
+        run: ./build.sh typecheck
+
+      - name: Release build
+        run: ./build.sh release
+
+      - name: Verify bundle
+        run: |
+          codesign --verify --deep --strict build/HapticGlow.app
+          /usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' build/HapticGlow.app/Contents/Info.plist
+
+      - name: Package DMG
+        run: scripts/make_dmg.sh build/HapticGlow.app build/HapticGlow-ci.dmg
+
+      - name: Zip app
+        run: ditto -c -k --keepParent build/HapticGlow.app build/HapticGlow-app.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: HapticGlow-app
+          path: build/HapticGlow-app.zip
+          if-no-files-found: error
+          retention-days: 14

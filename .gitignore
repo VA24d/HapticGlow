@@ -1,0 +1,14 @@
+build/
+graft/
+.testmondata
+.DS_Store
+*.dmg
+xcuserdata/
+*.xcuserstate
+.build/
+DerivedData/
+# research and scratch outputs
+research/
+*.log
+*.dSYM/
+.claude/

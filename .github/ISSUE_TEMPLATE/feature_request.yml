@@ -1,0 +1,16 @@
+name: Feature request
+description: Suggest a new mode, device or setting.
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What do you want to do
+      description: Describe the use case first, then any idea for how it could work.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: What you do today
+      description: Workarounds or other apps you have tried.

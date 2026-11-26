@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>en</string>
+	<key>CFBundleDisplayName</key>
+	<string>HapticGlow</string>
+	<key>CFBundleExecutable</key>
+	<string>HapticGlow</string>
+	<key>CFBundleIconFile</key>
+	<string>AppIcon</string>
+	<key>CFBundleIdentifier</key>
+	<string>com.hapticglow.mac</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleName</key>
+	<string>HapticGlow</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>2.0</string>
+	<key>CFBundleVersion</key>
+	<string>200</string>
+	<key>LSApplicationCategoryType</key>
+	<string>public.app-category.utilities</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>26.0</string>
+	<key>NSAppleEventsUsageDescription</key>
+	<string>HapticGlow asks your browser for the address of the tab that is playing sound, so it can use the Music feel for music sites and the Movie feel for video sites. Only the address and title are read, on your Mac, and nothing is saved or sent anywhere.</string>
+	<key>NSAudioCaptureUsageDescription</key>
+	<string>HapticGlow listens to what your Mac is playing to pulse the keyboard backlight and trackpad in time with the music. Audio is analysed in memory for levels and beats only. Nothing is recorded, saved or sent anywhere.</string>
+	<key>NSHighResolutionCapable</key>
+	<true/>
+	<key>NSHumanReadableCopyright</key>
+	<string>HapticGlow by Vijay A (https://github.com/VA24d/HapticGlow). Copyright 2026 Vijay A. GPL-3.0-only. Key sounds: kbsim by Thomas Lai (MIT).</string>
+	<key>NSSupportsAutomaticTermination</key>
+	<false/>
+	<key>NSSupportsSuddenTermination</key>
+	<false/>
+</dict>
+</plist>

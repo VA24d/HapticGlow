@@ -1,0 +1,16 @@
+cff-version: 1.2.0
+message: "If you use HapticGlow, please cite it as below."
+title: HapticGlow
+type: software
+abstract: "A native macOS app that drives keyboard backlight, Force Touch trackpad haptics and mechanical key sounds from system audio."
+authors:
+  - name: Vijay A
+repository-code: "https://github.com/VA24d/HapticGlow"
+url: "https://github.com/VA24d/HapticGlow"
+license: GPL-3.0-only
+date-released: 2026-11-26
+keywords:
+  - macOS
+  - haptics
+  - keyboard backlight
+  - Swift

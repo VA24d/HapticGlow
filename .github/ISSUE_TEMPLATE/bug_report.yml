@@ -1,0 +1,46 @@
+name: Bug report
+description: Something in HapticGlow does not work as expected.
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you saw, and what you expected instead.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: "1. Play music in Spotify\n2. Switch to Pulse mode\n3. ..."
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: HapticGlow version
+      placeholder: "2.0"
+    validations:
+      required: true
+  - type: input
+    id: macos
+    attributes:
+      label: macOS version and Mac model
+      placeholder: "macOS 26.1, MacBook Pro M3"
+    validations:
+      required: true
+  - type: dropdown
+    id: keyboard
+    attributes:
+      label: Keyboard
+      options:
+        - Built-in keyboard only
+        - Logitech MX Keys
+        - Both
+  - type: textarea
+    id: logs
+    attributes:
+      label: Log excerpt
+      description: The last lines of ~/Library/Logs/HapticGlow/hapticglow.log, if relevant.
+      render: text

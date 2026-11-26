@@ -1,0 +1,127 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build, sign and publish
+    runs-on: macos-26
+    timeout-minutes: 60
+    env:
+      HAVE_CERT: ${{ secrets.MACOS_CERT_P12 != '' }}
+      HAVE_NOTARY: ${{ secrets.NOTARY_APPLE_ID != '' && secrets.NOTARY_TEAM_ID != '' && secrets.NOTARY_PASSWORD != '' }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Require tagged commit on main
+        run: |
+          git fetch origin main
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo "Tag $GITHUB_REF_NAME is not on main; refusing to release." >&2
+            exit 1
+          fi
+
+      - name: Select Xcode
+        run: |
+          latest="$(ls -d /Applications/Xcode_*.app 2>/dev/null | sort -V | tail -n 1)"
+          if [ -n "$latest" ]; then sudo xcode-select -s "$latest/Contents/Developer"; fi
+          swift --version
+
+      - name: Check tag matches app version
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          ver="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' Resources/Info.plist)"
+          if [ "$tag" != "$ver" ]; then
+            echo "Tag $GITHUB_REF_NAME does not match CFBundleShortVersionString $ver" >&2
+            exit 1
+          fi
+
+      - name: Build
+        run: ./build.sh release
+
+      - name: Import Developer ID certificate
+        if: env.HAVE_CERT == 'true'
+        env:
+          MACOS_CERT_P12: ${{ secrets.MACOS_CERT_P12 }}
+          MACOS_CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+        run: |
+          KEYCHAIN="$RUNNER_TEMP/signing.keychain-db"
+          KEYCHAIN_PW="$(uuidgen)"
+          echo "$MACOS_CERT_P12" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security create-keychain -p "$KEYCHAIN_PW" "$KEYCHAIN"
+          security set-keychain-settings -lut 3600 "$KEYCHAIN"
+          security unlock-keychain -p "$KEYCHAIN_PW" "$KEYCHAIN"
+          security import "$RUNNER_TEMP/cert.p12" -P "$MACOS_CERT_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN"
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$KEYCHAIN_PW" "$KEYCHAIN" >/dev/null
+          security list-keychains -d user -s "$KEYCHAIN" $(security list-keychains -d user | tr -d '"')
+          rm -f "$RUNNER_TEMP/cert.p12"
+          echo "KEYCHAIN=$KEYCHAIN" >> "$GITHUB_ENV"
+
+      - name: Sign app (Developer ID)
+        if: env.HAVE_CERT == 'true'
+        env:
+          MACOS_SIGN_ID: ${{ secrets.MACOS_SIGN_ID }}
+        run: |
+          codesign --force --deep --sign "$MACOS_SIGN_ID" --options runtime --timestamp \
+            --entitlements Resources/HapticGlow.entitlements build/HapticGlow.app
+          codesign --verify --deep --strict --verbose=2 build/HapticGlow.app
+
+      - name: Sign app (ad-hoc)
+        if: env.HAVE_CERT != 'true'
+        run: |
+          codesign --force --deep --sign - --options runtime \
+            --entitlements Resources/HapticGlow.entitlements build/HapticGlow.app
+          codesign --verify --deep --strict build/HapticGlow.app
+
+      - name: Create DMG
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          scripts/make_dmg.sh build/HapticGlow.app "build/HapticGlow-$VERSION.dmg"
+          echo "DMG=build/HapticGlow-$VERSION.dmg" >> "$GITHUB_ENV"
+
+      - name: Sign DMG (Developer ID)
+        if: env.HAVE_CERT == 'true'
+        env:
+          MACOS_SIGN_ID: ${{ secrets.MACOS_SIGN_ID }}
+        run: codesign --force --sign "$MACOS_SIGN_ID" --timestamp "$DMG"
+
+      - name: Notarize and staple
+        if: env.HAVE_CERT == 'true' && env.HAVE_NOTARY == 'true'
+        env:
+          NOTARY_APPLE_ID: ${{ secrets.NOTARY_APPLE_ID }}
+          NOTARY_TEAM_ID: ${{ secrets.NOTARY_TEAM_ID }}
+          NOTARY_PASSWORD: ${{ secrets.NOTARY_PASSWORD }}
+        run: |
+          xcrun notarytool submit "$DMG" --apple-id "$NOTARY_APPLE_ID" --team-id "$NOTARY_TEAM_ID" \
+            --password "$NOTARY_PASSWORD" --wait
+          xcrun stapler staple "$DMG"
+          xcrun stapler validate "$DMG"
+
+      - name: Checksum
+        run: |
+          cd build
+          shasum -a 256 "$(basename "$DMG")" > "$(basename "$DMG").sha256"
+          cat "$(basename "$DMG").sha256"
+          # Same DMG under a fixed name, so the README can link straight to
+          # releases/latest/download/HapticGlow.dmg.
+          cp "$(basename "$DMG")" HapticGlow.dmg
+
+      - name: Remove signing keychain
+        if: always() && env.KEYCHAIN != ''
+        run: security delete-keychain "$KEYCHAIN" || true
+
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            --title "HapticGlow ${GITHUB_REF_NAME#v}" \
+            --generate-notes --verify-tag \
+            "$DMG" "$DMG.sha256" build/HapticGlow.dmg
