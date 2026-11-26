@@ -12,3 +12,8 @@ research/
 *.log
 *.dSYM/
 .claude/
+*.p12
+*.cer
+*.mobileprovision
+.swiftpm/
+*.swp

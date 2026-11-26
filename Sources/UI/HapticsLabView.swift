@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-only
+// Copyright 2026 Vijay A. HapticGlow: https://github.com/VA24d/HapticGlow
+// Additional attribution terms under GPLv3 section 7(b): see NOTICE.md.
 // Haptics Lab section for the Trackpad Haptics page: manual primitives, governor readout, guided feel test.
 import SwiftUI
 
@@ -12,6 +15,7 @@ struct HapticsLabSection: View {
                 HStack(spacing: 6) {
                     Image(systemName: "chevron.right").font(.system(size: 9, weight: .bold))
                         .rotationEffect(.degrees(open ? 90 : 0)).foregroundStyle(Theme.textTertiary).frame(width: 10)
+                        .accessibilityHidden(true)
                     Text("HAPTICS LAB").font(Theme.Font.section).tracking(0.6).foregroundStyle(Theme.textSecondary)
                     Text("Low-level controls and a guided feel test").font(Theme.Font.caption).foregroundStyle(Theme.textTertiary)
                     Spacer()
@@ -19,6 +23,8 @@ struct HapticsLabSection: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+            .accessibilityLabel("Haptics Lab")
+            .accessibilityValue(open ? "expanded" : "collapsed")
             if open {
                 VStack(alignment: .leading, spacing: Theme.Space.m) {
                     Picker("Page", selection: $page) { ForEach(Page.allCases) { Text($0.rawValue).tag($0) } }

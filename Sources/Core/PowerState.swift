@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-only
+// Copyright 2026 Vijay A. HapticGlow: https://github.com/VA24d/HapticGlow
+// Additional attribution terms under GPLv3 section 7(b): see NOTICE.md.
 // Power state: battery vs. AC and Low Power Mode, so engines can save energy on battery.
 import Foundation
 import IOKit.ps
@@ -35,7 +38,7 @@ final class PowerState: @unchecked Sendable {
             Unmanaged<PowerState>.fromOpaque(ctx).takeUnretainedValue().refresh(notify: true)
         }, ctx)?.takeRetainedValue() {
             runLoopSource = src
-            CFRunLoopAddSource(CFRunLoopGetMain(), src, .defaultMode)
+            CFRunLoopAddSource(CFRunLoopGetMain(), src, .commonModes)
         }
     }
 

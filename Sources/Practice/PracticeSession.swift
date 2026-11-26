@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-only
+// Copyright 2026 Vijay A. HapticGlow: https://github.com/VA24d/HapticGlow
+// Additional attribution terms under GPLv3 section 7(b): see NOTICE.md.
 // Practice session controller: owns the current test, turns KeyCatcher events into engine input,
 // runs the clock, commits results. UI-independent apart from KeyCatcherEvent.
 import Foundation

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-only
+// Copyright 2026 Vijay A. HapticGlow: https://github.com/VA24d/HapticGlow
+// Additional attribution terms under GPLv3 section 7(b): see NOTICE.md.
 // MacBook Pro (14"/16" Apple Silicon) and MacBook Air (M1 / M2+) ANSI keyboard geometry.
 // Rects are in key units (1u ≈ 19.05 mm pitch, 14.5u wide), origin top-left.
 // Virtual keycodes are the Carbon kVK_* values.

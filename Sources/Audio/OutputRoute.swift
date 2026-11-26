@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-only
+// Copyright 2026 Vijay A. HapticGlow: https://github.com/VA24d/HapticGlow
+// Additional attribution terms under GPLv3 section 7(b): see NOTICE.md.
 // HapticGlow — default output route detection, spatial key-sound settings and the spatial render chain.
 //
 // OutputRoute watches the default output device (kind, name, nominal rate) and publishes a snapshot.
@@ -236,24 +239,33 @@ final class SpatialSettings: @unchecked Sendable {
         var speakerTuning = true      // psychoacoustic bass + low shelf on built-in speakers
     }
 
-    var enabled: Bool { didSet { changed() } }
-    var onBluetooth: Bool { didSet { changed() } }
-    var speakerTuning: Bool { didSet { changed() } }
+    var enabled: Bool { didSet { let v = enabled; changed { $0.enabled = v } } }
+    var onBluetooth: Bool { didSet { let v = onBluetooth; changed { $0.onBluetooth = v } } }
+    var speakerTuning: Bool { didSet { let v = speakerTuning; changed { $0.speakerTuning = v } } }
 
     /// Called after any change (engine rebuild hook), main or any thread.
-    @ObservationIgnored var onChange: (() -> Void)?
+    var onChange: (() -> Void)? {
+        get { hookLock.withLock { _onChange } }
+        set { hookLock.withLock { _onChange = newValue } }
+    }
+    @ObservationIgnored private var _onChange: (() -> Void)?
+    @ObservationIgnored private let hookLock = UnfairLock()
+    /// Lock-protected copy read by background threads; the observable properties above are for the UI.
+    @ObservationIgnored private let snapshot: Locked<Stored>
 
     init() {
         var s = Stored()
         if let d = UserDefaults.standard.data(forKey: Self.key),
            let v = try? JSONDecoder().decode(Stored.self, from: d) { s = v }
+        snapshot = Locked(s)
         enabled = s.enabled; onBluetooth = s.onBluetooth; speakerTuning = s.speakerTuning
     }
 
-    var stored: Stored { Stored(enabled: enabled, onBluetooth: onBluetooth, speakerTuning: speakerTuning) }
+    var stored: Stored { snapshot.get() }
 
-    private func changed() {
-        if let d = try? JSONEncoder().encode(stored) { UserDefaults.standard.set(d, forKey: Self.key) }
+    private func changed(_ edit: (inout Stored) -> Void) {
+        let s = snapshot.update2 { edit(&$0); return $0 }
+        if let d = try? JSONEncoder().encode(s) { UserDefaults.standard.set(d, forKey: Self.key) }
         onChange?()
     }
 

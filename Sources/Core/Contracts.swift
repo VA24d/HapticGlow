@@ -1,7 +1,10 @@
+// SPDX-License-Identifier: GPL-3.0-only
+// Copyright 2026 Vijay A. HapticGlow: https://github.com/VA24d/HapticGlow
+// Additional attribution terms under GPLv3 section 7(b): see NOTICE.md.
 // HapticGlow — shared contract between engines and UI.
 //
-// FROZEN API: engines and UI are written against these exact names. Implementations may add
-// private helpers and extra (defaulted) fields, but must not rename or remove anything here.
+// Stable interface between the engines and the UI. Implementations may add private helpers and
+// extra (defaulted) fields, but should not rename or remove anything here.
 //
 // Threading model
 // - Audio tap IO thread  -> AudioAnalyzer.process(...) -> FeatureBus.publish(...)
@@ -528,12 +531,24 @@ enum Log {
     static func write(_ msg: String) {
         logger.log("\(msg, privacy: .public)")
         let line = "[\(String(format: "%.3f", hostNow()))] \(msg)\n"
+        let data = Data(line.utf8)
         fileLock.withLock {
             if let h = try? FileHandle(forWritingTo: fileURL) {
-                h.seekToEndOfFile(); h.write(line.data(using: .utf8)!); try? h.close()
+                let size = h.seekToEndOfFile()
+                if size >= maxFileBytes {
+                    try? h.close()
+                    let old = fileURL.deletingLastPathComponent().appendingPathComponent("hapticglow.1.log")
+                    try? FileManager.default.removeItem(at: old)
+                    try? FileManager.default.moveItem(at: fileURL, to: old)
+                    try? data.write(to: fileURL)
+                } else {
+                    h.write(data); try? h.close()
+                }
             } else {
-                try? line.data(using: .utf8)!.write(to: fileURL)
+                try? data.write(to: fileURL)
             }
         }
     }
+    /// The log rolls over to hapticglow.1.log (one old file kept) past this size.
+    private static let maxFileBytes: UInt64 = 2 * 1024 * 1024
 }

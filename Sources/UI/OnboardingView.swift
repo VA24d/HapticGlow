@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-only
+// Copyright 2026 Vijay A. HapticGlow: https://github.com/VA24d/HapticGlow
+// Additional attribution terms under GPLv3 section 7(b): see NOTICE.md.
 // First-run sheet: 3 steps with progress dots.
 import SwiftUI
 
@@ -114,8 +117,11 @@ struct OnboardingView: View {
             HStack(spacing: 6) {
                 ForEach(0..<steps, id: \.self) { i in
                     Circle().fill(i == step ? Theme.textPrimary : Theme.hairlineStrong).frame(width: 6, height: 6)
+                        .accessibilityHidden(true)
                 }
             }
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("Step \(step + 1) of \(steps)")
             Spacer()
             HStack(spacing: 8) {
                 if step > 0 { Button("Back") { step -= 1 } }
@@ -133,18 +139,21 @@ struct OnboardingView: View {
 
 /// Lights up when KeyBus delivers a key event; lets people confirm Input Monitoring works.
 private struct KeyIndicator: View {
-    @State private var pulse = UIPulse.shared
+    private struct Snap: Equatable { var seen: Bool; var lit: Bool }
+
     var body: some View {
-        TimelineView(.animation(minimumInterval: 0.1, paused: !pulse.visible)) { _ in
+        Polled(every: 0.1, read: {
             let last = KeyBus.shared.lastEvent()
-            let lit = last.map { hostNow() - $0.time < 0.4 } ?? false
+            return Snap(seen: last != nil, lit: last.map { hostNow() - $0.time < 0.4 } ?? false)
+        }) { s in
             HStack(spacing: 6) {
                 RoundedRectangle(cornerRadius: Theme.Radius.key, style: .continuous)
-                    .fill(lit ? Theme.glow : Theme.track)
+                    .fill(s.lit ? Theme.glow : Theme.track)
                     .frame(width: 22, height: 16)
                     .overlay(RoundedRectangle(cornerRadius: Theme.Radius.key, style: .continuous).strokeBorder(Theme.hairlineStrong, lineWidth: 0.5))
-                    .animation(.easeOut(duration: 0.2), value: lit)
-                Text(last == nil ? "Press any key" : (lit ? "Key detected" : "Press another key"))
+                    .animation(.easeOut(duration: 0.2), value: s.lit)
+                    .accessibilityHidden(true)
+                Text(!s.seen ? "Press any key" : (s.lit ? "Key detected" : "Press another key"))
                     .font(Theme.Font.caption).foregroundStyle(Theme.textSecondary)
             }
         }

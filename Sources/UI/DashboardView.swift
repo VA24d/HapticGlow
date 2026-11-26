@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-only
+// Copyright 2026 Vijay A. HapticGlow: https://github.com/VA24d/HapticGlow
+// Additional attribution terms under GPLv3 section 7(b): see NOTICE.md.
 // Dashboard: live keyboard + spectrum, stat tiles, engine switches, and a status banner.
 import SwiftUI
 
@@ -138,23 +141,29 @@ private struct EngineSwitch: View {
     var body: some View {
         HStack(spacing: Theme.Space.m) {
             Image(systemName: symbol).font(.system(size: 14)).foregroundStyle(Theme.textSecondary).frame(width: 20)
+                .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 2) {
                 Text(title).font(Theme.Font.label).foregroundStyle(Theme.textPrimary)
                 HStack(spacing: 5) {
-                    StatusDot(status: isOn ? status : .stopped, size: 6)
+                    StatusDot(status: isOn ? status : .stopped, size: 6).accessibilityHidden(true)
                     Text(isOn ? status.label : "Off").font(Theme.Font.caption).foregroundStyle(Theme.textSecondary).lineLimit(1)
                 }
             }
+            .accessibilityHidden(true)
             Spacer(minLength: 0)
-            Toggle("", isOn: $isOn).labelsHidden().toggleStyle(.switch).controlSize(.small)
+            Toggle(title, isOn: $isOn).labelsHidden().toggleStyle(.switch).controlSize(.small)
+                .accessibilityValue(isOn ? status.label : "Off")
         }
         .padding(Theme.Space.m)
         .frame(maxWidth: .infinity)
         .background(Theme.surface, in: RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: Theme.Radius.card, style: .continuous).strokeBorder(Theme.hairline, lineWidth: 0.5))
+        .background {
+            Button(action: open) { Color.clear }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Open \(title)")
+        }
         .contentShape(Rectangle())
-        .onTapGesture(perform: open)
-        .accessibilityElement(children: .combine)
     }
 }
 

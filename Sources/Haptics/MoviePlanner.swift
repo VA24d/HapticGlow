@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-only
+// Copyright 2026 Vijay A. HapticGlow: https://github.com/VA24d/HapticGlow
+// Additional attribution terms under GPLv3 section 7(b): see NOTICE.md.
 // HapticGlow - movie-mode planner (cinema LFE impacts and sustained sub-bass rumble).
 //
 // Pure logic, no motor access: `observe` ingests raw capture-time frames to detect impacts against

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-only
+// Copyright 2026 Vijay A. HapticGlow: https://github.com/VA24d/HapticGlow
+// Additional attribution terms under GPLv3 section 7(b): see NOTICE.md.
 // Trackpad Haptics: mode cards, strength / cutoff / punch / pitch, test thump, live readout.
 import SwiftUI
 
@@ -25,7 +28,7 @@ struct HapticsView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: Theme.Space.xl) {
                 PageHeader(title: "Trackpad Haptics", subtitle: "Feel your music through the Force Touch trackpad.")
-                if AppModel.silentLaunch {
+                if AppModel.silentLaunch && !SnapshotMode.active {
                     ScreenNotice(symbol: "speaker.slash", title: "Haptics are off for this session",
                                  message: "Haptics are off for this session (started in test mode). Relaunch HapticGlow to turn them on.",
                                  actionTitle: "Relaunch", action: { relaunchApp() })
@@ -166,10 +169,10 @@ struct HapticsView: View {
                             Button("Test") { HapticEngine.shared.testThump() }
                             Text(model.haptic.quiet ? "Felt, not heard" : "May be faintly audible").font(Theme.Font.caption).foregroundStyle(Theme.textTertiary)
                         }
-                        TimelineView(.animation(minimumInterval: 0.2, paused: !UIPulse.shared.visible)) { _ in
+                        Polled(every: 0.2, read: { Int(HapticEngine.shared.actuationsPerSecond.rounded()) }) { rate in
                             HStack(spacing: 6) {
                                 StatusDot(status: model.hapticStatus, size: 6)
-                                Text(String(format: "%.0f actuations/s", HapticEngine.shared.actuationsPerSecond))
+                                Text("\(rate) actuations/s")
                                     .font(Theme.Font.numeral).foregroundStyle(Theme.textSecondary)
                             }
                         }

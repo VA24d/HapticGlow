@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-only
+// Copyright 2026 Vijay A. HapticGlow: https://github.com/VA24d/HapticGlow
+// Additional attribution terms under GPLv3 section 7(b): see NOTICE.md.
 // HapticGlow entry point: window scene, menu bar extra, commands, CLI probe.
 import SwiftUI
 import AppKit
@@ -38,6 +41,47 @@ enum Launcher {
     }
 }
 
+/// Hands both keyboards back to their own settings exactly once, whichever quit path gets here first.
+/// The built-in and Logitech restores run concurrently; a second caller waits for the first to finish.
+/// Everything is capped at about 3 s so a stuck keyboard cannot hold up the quit.
+enum QuitCoordinator {
+    private static let cond = NSCondition()
+    nonisolated(unsafe) private static var started = false
+    nonisolated(unsafe) private static var finished = false
+    private static let cap: Double = 3.0
+
+    static func handBack() {
+        let deadline = Date(timeIntervalSinceNow: cap)
+        cond.lock()
+        if started {
+            while !finished, cond.wait(until: deadline) {}
+            cond.unlock()
+            return
+        }
+        started = true
+        cond.unlock()
+
+        let group = DispatchGroup()
+        group.enter()
+        DispatchQueue.global(qos: .userInteractive).async {
+            BacklightDriver.shared.restore(seal: true)
+            group.leave()
+        }
+        group.enter()
+        DispatchQueue.global(qos: .userInteractive).async {
+            LogitechBacklight.shared.restoreForQuit()
+            group.leave()
+        }
+        if group.wait(timeout: .now() + cap) == .timedOut {
+            Log.write("[quit] hand-back did not finish within \(cap) s")
+        }
+        cond.lock()
+        finished = true
+        cond.broadcast()
+        cond.unlock()
+    }
+}
+
 /// One set of termination-signal sources for the whole app, installed once at launch on one serial queue.
 /// Hands both keyboards back to their own settings, then re-raises the signal with the default action.
 enum QuitSignals {
@@ -54,8 +98,7 @@ enum QuitSignals {
                 guard !ran else { return }   // a second signal while the first is restoring
                 ran = true
                 GlowEngine.shared.stop(quitting: true)
-                LogitechBacklight.shared.restoreForQuit()
-                BacklightDriver.shared.restore(seal: true)
+                QuitCoordinator.handBack()
                 signal(sig, SIG_DFL)
                 raise(sig)
             }

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-only
+// Copyright 2026 Vijay A. HapticGlow: https://github.com/VA24d/HapticGlow
+// Additional attribution terms under GPLv3 section 7(b): see NOTICE.md.
 // Menu bar panel (MenuBarExtra .window style): compact Control Center-style modules.
 import SwiftUI
 import AppKit
@@ -211,6 +214,7 @@ private struct ModeMenu: View {
         }
         .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden)
         .accessibilityLabel("\(caption) mode")
+        .accessibilityValue(info.title)
     }
 }
 

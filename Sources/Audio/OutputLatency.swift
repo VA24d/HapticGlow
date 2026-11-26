@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-only
+// Copyright 2026 Vijay A. HapticGlow: https://github.com/VA24d/HapticGlow
+// Additional attribution terms under GPLv3 section 7(b): see NOTICE.md.
 // HapticGlow — default output device latency (capture -> ear delay).
 //
 // The process tap sees samples before the output device plays them. Total delay to the ear is
@@ -118,10 +121,15 @@ final class OutputLatency: @unchecked Sendable {
 
     // MARK: listening
 
+    /// The nominal rate is a global-scope property (it is read that way); the others live on the output scope.
+    private static func scope(of s: AudioObjectPropertySelector) -> AudioObjectPropertyScope {
+        s == kAudioDevicePropertyNominalSampleRate ? kAudioObjectPropertyScopeGlobal : kAudioObjectPropertyScopeOutput
+    }
+
     private func unwatch() {
         if watched != 0, let b = devBlock {
             for s in Self.devSelectors {
-                var a = Self.addr(s, scope: kAudioObjectPropertyScopeOutput)
+                var a = Self.addr(s, scope: Self.scope(of: s))
                 AudioObjectRemovePropertyListenerBlock(watched, &a, queue, b)
             }
         }
@@ -135,7 +143,7 @@ final class OutputLatency: @unchecked Sendable {
             let blk: AudioObjectPropertyListenerBlock = { [weak self] _, _ in self?.refresh(rewatch: false) }
             devBlock = blk; watched = i.deviceID
             for s in Self.devSelectors {
-                var a = Self.addr(s, scope: kAudioObjectPropertyScopeOutput)
+                var a = Self.addr(s, scope: Self.scope(of: s))
                 AudioObjectAddPropertyListenerBlock(i.deviceID, &a, queue, blk)
             }
         }

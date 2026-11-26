@@ -37,7 +37,7 @@ There is no contributor license agreement and no sign-off line. By submitting a 
 
 ## Attribution rule
 
-Keep the notice "HapticGlow by Vijay A (https://github.com/VA24d/HapticGlow)" in the README, NOTICE and About window of anything you distribute, as [NOTICE.md](NOTICE.md) requires. Add your own copyright line for your changes if you like, but do not remove the original. Keep third-party licenses (for example `Sounds/LICENSE-kbsim.txt`) with the files they cover.
+If you distribute a copy or fork, keep [NOTICE.md](NOTICE.md) and the notice "HapticGlow by Vijay A (https://github.com/VA24d/HapticGlow)". If you distribute a work based on HapticGlow, keep the notice in its legal notices, its NOTICE file and any About screen, as [NOTICE.md](NOTICE.md) requires. Add your own copyright line for your changes if you like, but do not remove the original. Keep third-party licenses (for example `Sounds/LICENSE-kbsim.txt`) with the files they cover.
 
 Please do not add automated-tool attribution lines, co-author trailers or similar credit to commits, code or docs. Credit goes to the people who wrote the change.
 

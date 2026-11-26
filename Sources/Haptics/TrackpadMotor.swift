@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-only
+// Copyright 2026 Vijay A. HapticGlow: https://github.com/VA24d/HapticGlow
+// Additional attribution terms under GPLv3 section 7(b): see NOTICE.md.
 // HapticGlow - Force Touch trackpad motor driver.
 // Ported from nospeaker (MIT, os6 / Cody Collier): MultitouchSupport dlopen, actuator open and the
 // actuation dictionary format (BaseWaveform amplitude 0, Sine tones summing to 1, loudness = level arg).

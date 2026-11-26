@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-only
+// Copyright 2026 Vijay A. HapticGlow: https://github.com/VA24d/HapticGlow
+// Additional attribution terms under GPLv3 section 7(b): see NOTICE.md.
 // Logitech keyboard backlight (MX Keys family) over HID++ 2.0, feature BACKLIGHT2 (0x1982).
 //
 // Transport: the keyboard's vendor collection (usage page 0xFF43, usage 0x0202) takes 20-byte
@@ -19,6 +22,7 @@ import IOKit.hid
 enum HIDPPError: Error, CustomStringConvertible {
     case openFailed(IOReturn)
     case removed
+    case aborted          // quit began: the request was cut short
     case setReportFailed(IOReturn)
     case timeout(feature: UInt8, function: UInt8)
     case hidpp(feature: UInt8, function: UInt8, code: UInt8)
@@ -32,7 +36,7 @@ enum HIDPPError: Error, CustomStringConvertible {
 
     var isDisconnectLike: Bool {
         switch self {
-        case .openFailed, .removed, .setReportFailed, .timeout: return true
+        case .openFailed, .removed, .aborted, .setReportFailed, .timeout: return true
         case .hidpp(_, _, let code): return code == 0x06 // InvalidFeatureIndex
         case .shortReply: return false
         }
@@ -44,6 +48,8 @@ enum HIDPPError: Error, CustomStringConvertible {
             return String(format: "IOHIDDeviceOpen 0x%08x", UInt32(bitPattern: rc))
         case .removed:
             return "device removed"
+        case .aborted:
+            return "aborted for quit"
         case .setReportFailed(let rc):
             return String(format: "IOHIDDeviceSetReport 0x%08x", UInt32(bitPattern: rc))
         case .timeout(let feat, let fn):
@@ -77,8 +83,28 @@ final class HIDPPDevice: @unchecked Sendable {
     let device: IOHIDDevice
     let name: String
     let serial: String
-    var storageKey: String {
-        serial.isEmpty ? "logiOriginal.\(name)" : "logiOriginal.\(name).\(serial)"
+    /// Serial for log lines: only the last 4 characters.
+    var maskedSerial: String { serial.isEmpty ? "none" : "..." + serial.suffix(4) }
+    /// UserDefaults key for this keyboard. Stable when the serial is sometimes missing: the last serial seen
+    /// for this product name is reused, and a legacy name-only entry is moved over once.
+    let storageKey: String
+
+    private static func resolveStorageKey(name: String, serial: String) -> String {
+        let ud = UserDefaults.standard
+        let serialNote = "logiLastSerial.\(name)"
+        let legacy = "logiOriginal.\(name)"
+        var use = serial
+        if use.isEmpty { use = ud.string(forKey: serialNote) ?? "" }
+        else if ud.string(forKey: serialNote) != use { ud.set(use, forKey: serialNote) }
+        guard !use.isEmpty else { return legacy }
+        let key = "\(legacy).\(use)"
+        if ud.object(forKey: key) == nil, ud.object(forKey: legacy) != nil {
+            for (from, to) in [(legacy, key), ("\(legacy).engaged", "\(key).engaged"),
+                               ("logiMaxDuration.v2.\(legacy)", "logiMaxDuration.v2.\(key)")] {
+                if let v = ud.object(forKey: from) { ud.set(v, forKey: to); ud.removeObject(forKey: from) }
+            }
+        }
+        return key
     }
 
     private let reqLock = NSLock()
@@ -90,6 +116,7 @@ final class HIDPPDevice: @unchecked Sendable {
     private var nextSwId: UInt8 = UInt8((abs(Int(ProcessInfo.processInfo.processIdentifier)) % 14) + 1)
     private var removed = false
     private var closed = false
+    private var abortRequests = false
     /// Called (on the HID thread, outside any lock) for every vendor report that is not the reply to our own
     /// pending request: a keyboard that just woke talks first.
     var onUnsolicited: (@Sendable () -> Void)? {
@@ -111,7 +138,9 @@ final class HIDPPDevice: @unchecked Sendable {
         self.device = d
         self.name = name
         self.serial = serial
-        let ctx = Unmanaged.passUnretained(self).toOpaque()
+        self.storageKey = Self.resolveStorageKey(name: name, serial: serial)
+        // The callbacks hold one retain, dropped on the IO thread after they are unregistered (see close()).
+        let ctx = Unmanaged.passRetained(self).toOpaque()
         IOHIDDeviceRegisterInputReportCallback(d, buf, 64, { ctx, _, _, _, id, r, l in
             guard let ctx else { return }
             let me = Unmanaged<HIDPPDevice>.fromOpaque(ctx).takeUnretainedValue()
@@ -144,13 +173,22 @@ final class HIDPPDevice: @unchecked Sendable {
         cond.broadcast()
         cond.unlock()
         guard !already else { return }
-        HIDPPDevice.ioThread.unschedule(device, buf: buf)
+        HIDPPDevice.ioThread.unschedule(device, buf: buf, ctx: Unmanaged.passUnretained(self).toOpaque())
         IOHIDDeviceClose(device, 0)
     }
 
     deinit {
-        close()
+        // Only reached after close() released the callback retain; no callback can still run.
         buf.deallocate()
+    }
+
+    /// Wakes any request waiting on a reply so it returns at once (quit path). Requests made with
+    /// `bypassAbort` still run.
+    func abortPending() {
+        cond.lock()
+        abortRequests = true
+        cond.broadcast()
+        cond.unlock()
     }
 
     private func markRemoved() {
@@ -188,7 +226,7 @@ final class HIDPPDevice: @unchecked Sendable {
     }
 
     /// Synchronous HID++ 2.0 request. Returns parameter bytes or a typed HIDPPError.
-    func requestResult(feature: UInt8, function: UInt8, params: [UInt8] = [], timeout: Double = 1.0) -> Result<[UInt8], HIDPPError> {
+    func requestResult(feature: UInt8, function: UInt8, params: [UInt8] = [], timeout: Double = 1.0, bypassAbort: Bool = false) -> Result<[UInt8], HIDPPError> {
         reqLock.lock(); defer { reqLock.unlock() }
         let swId = nextSwId
         nextSwId = (nextSwId % 15) + 1
@@ -199,6 +237,7 @@ final class HIDPPDevice: @unchecked Sendable {
 
         cond.lock()
         if removed || closed { cond.unlock(); return .failure(.removed) }
+        if abortRequests && !bypassAbort { cond.unlock(); return .failure(.aborted) }
         reply = nil
         waitingFeature = feature
         waitingFunction = function
@@ -225,6 +264,7 @@ final class HIDPPDevice: @unchecked Sendable {
         let deadline = Date().addingTimeInterval(timeout)
         while reply == nil {
             if removed || closed { return .failure(.removed) }
+            if abortRequests && !bypassAbort { return .failure(.aborted) }
             if !cond.wait(until: deadline) { return .failure(.timeout(feature: feature, function: function)) }
         }
         guard let b = reply else { return .failure(.timeout(feature: feature, function: function)) }
@@ -293,12 +333,13 @@ final class HIDPPDevice: @unchecked Sendable {
             CFRunLoopWakeUp(rl)
             sem.wait()
         }
-        func unschedule(_ d: IOHIDDevice, buf: UnsafeMutablePointer<UInt8>) {
+        func unschedule(_ d: IOHIDDevice, buf: UnsafeMutablePointer<UInt8>, ctx: UnsafeMutableRawPointer) {
             guard let rl else { return }
             let work = {
-                IOHIDDeviceRegisterInputReportCallback(d, buf, 0, nil, nil)
-                IOHIDDeviceRegisterRemovalCallback(d, nil, nil)
+                IOHIDDeviceRegisterInputReportCallback(d, buf, 0, nil, ctx)
+                IOHIDDeviceRegisterRemovalCallback(d, nil, ctx)
                 IOHIDDeviceUnscheduleFromRunLoop(d, rl, CFRunLoopMode.defaultMode.rawValue)
+                Unmanaged<HIDPPDevice>.fromOpaque(ctx).release()
             }
             if Thread.current === thread {
                 work()
@@ -358,6 +399,8 @@ final class LogitechBacklight: @unchecked Sendable {
     private static let quietVerifyInterval: Double = 300
     private static let maxRuntimeDuration: UInt16 = 1440   // 2 h in 5 s units; the MX Keys rejects more
     private static let quietAfter: Double = 300
+    private static let keepaliveAC: Double = 600       // rewrite the engaged config this often (10 min)
+    private static let keepaliveSaver: Double = 1200   // on battery / Low Power Mode (20 min)
     private static let minBackoff: Double = 2.0
     private static let maxBackoff: Double = 30.0
     private static let minWriteFloor: Double = 0.036
@@ -381,6 +424,10 @@ final class LogitechBacklight: @unchecked Sendable {
         var lastChangeAt: Double = 0
         var pendingRestore: Bool = false // restore failed (asleep); retry when it wakes, while not engaged
         var quitFailed: Bool = false     // restoreForQuit timed out on this board; do not retry within the quit
+        var lastSentAt: Double = 0       // last successful engaged write (keepalive clock)
+        var fallbackDurations: Bool = false // engaged with the keyboard's own durations after probing failed
+        var reprobeAt: Double = 0
+        var reprobeDelay: Double = 60
     }
 
     private struct BoardID { let serial: String; let product: String; let location: Int }
@@ -392,6 +439,10 @@ final class LogitechBacklight: @unchecked Sendable {
     private let anyStale = Locked<Bool>(false)
     private let nextRetryBox = Locked<Double?>(nil)
     private let managerActivityAt = Locked<Double>(0)
+    private let keyboardKick = Locked<Bool>(false)      // input after a long quiet spell: refresh the lighting
+    private let hidMirror = Locked<[HIDPPDevice]>([])   // boards' devices, readable without `lock`
+    private let levelsMirror = Locked<Int>(1)
+    private let lastPushedLevel = Locked<Int>(-1)
 
     private static func maxDurKey(_ h: HIDPPDevice) -> String { "logiMaxDuration.v2.\(h.storageKey)" }
 
@@ -401,9 +452,17 @@ final class LogitechBacklight: @unchecked Sendable {
     }
 
     private func noteManagerActivity(from dev: IOHIDDevice) {
-        guard anyStale.get(), isKnownBoardReport(dev) else { return }
-        managerActivityAt.set(hostNow())
-        noteActivity()
+        let now = hostNow()
+        let prev = managerActivityAt.get()
+        let stale = anyStale.get()
+        if !stale && now - prev < 1 { return }   // typing: one check per second is plenty
+        guard isKnownBoardReport(dev) else { return }
+        managerActivityAt.set(now)
+        if stale { noteActivity(); return }
+        if prev > 0, now - prev >= Self.quietAfter {
+            keyboardKick.set(true)
+            wcond.lock(); housekeepFlag = true; wcond.signal(); wcond.unlock()
+        }
     }
 
     /// True for a report from a known board's own interfaces or from a keyboard-class Logitech device.
@@ -426,6 +485,8 @@ final class LogitechBacklight: @unchecked Sendable {
     }
 
     private func updateKnownLocked() {
+        hidMirror.set(boards.map(\.hid))
+        levelsMirror.set(max(boards.map(\.levels).max() ?? 1, 1))
         knownIDs.set(boards.map { b in
             BoardID(serial: b.hid.serial, product: b.hid.name,
                     location: (IOHIDDeviceGetProperty(b.hid.device, kIOHIDLocationIDKey as CFString) as? Int) ?? 0)
@@ -447,7 +508,7 @@ final class LogitechBacklight: @unchecked Sendable {
         boards[i].lastLevel = -1
         refreshAnyStaleLocked()
         if first {
-            Log.write("[logi] \(boards[i].hid.name): asleep (no reply); retrying with backoff, or at once when it talks")
+            logThrottled(key: "asleep.\(boards[i].hid.name)", msg: "[logi] \(boards[i].hid.name): asleep (no reply); retrying with backoff, or at once when it talks", interval: 60)
         } else {
             logThrottled(key: "still-asleep.\(boards[i].hid.name)", msg: "[logi] \(boards[i].hid.name): still asleep", interval: 60)
         }
@@ -459,7 +520,7 @@ final class LogitechBacklight: @unchecked Sendable {
             boards[i].wakeAttemptedAt = 0
             boards[i].retryDelay = 1
             refreshAnyStaleLocked()
-            Log.write("[logi] \(boards[i].hid.name): awake; resent manual level \(level) after \(String(format: "%.1f", now - boards[i].staleAt)) s")
+            logThrottled(key: "awake.\(boards[i].hid.name)", msg: "[logi] \(boards[i].hid.name): awake; resent manual level \(level) after \(String(format: "%.1f", now - boards[i].staleAt)) s", interval: 60)
         }
         boards[i].lastVerify = now
         if anyStale.get() { refreshAnyStaleLocked() }
@@ -495,6 +556,13 @@ final class LogitechBacklight: @unchecked Sendable {
         guard let data = UserDefaults.standard.data(forKey: key) else { return nil }
         let arr = [UInt8](data)
         return arr.count == 12 ? arr : nil
+    }
+
+    /// True when a manual config carries durations HapticGlow itself writes (equal dho/dhi from the probe list).
+    private static func looksLikeOwnEngaged(_ cfg: [UInt8]) -> Bool {
+        guard cfg.count >= 12 else { return false }
+        let dho = u16LE(cfg, 6), dhi = u16LE(cfg, 8), dpow = u16LE(cfg, 10)
+        return dho == dhi && dpow >= dho && durationCandidates.contains(dho)
     }
 
     private static func dirtyKey(_ h: HIDPPDevice) -> String { "\(h.storageKey).engaged" }
@@ -561,7 +629,7 @@ final class LogitechBacklight: @unchecked Sendable {
             discoverLock.unlock()
             return
         }
-        Log.write("[logi] \(prod): HID device re-matched; rescanning")
+        logThrottled(key: "matched.\(prod)", msg: "[logi] \(prod): HID device re-matched; rescanning", interval: 60)
         wcond.withLock {
             nextDiscoverAt = 0
             backoffSeconds = Self.minBackoff
@@ -599,7 +667,7 @@ final class LogitechBacklight: @unchecked Sendable {
         }
         lock.unlock()
         for name in removedNames {
-            Log.write("[logi] \(name): disconnected (HID device removed)")
+            logThrottled(key: "removed.\(name)", msg: "[logi] \(name): disconnected (HID device removed)", interval: 60)
         }
         if nowEmpty {
             wcond.withLock {
@@ -625,21 +693,24 @@ final class LogitechBacklight: @unchecked Sendable {
 
     private func discoverLocked(diag: ((String) -> Void)?) -> [String] {
         guard !isSealed else { return [] }
-        let hadBoards = lock.withLock { () -> Bool in
-            let had = !boards.isEmpty
-            closeCurrentBoardsLocked()
-            return had
-        }
+        // Boards that are still open and valid are kept as they are; the rest are replaced by the scan.
+        let existing = lock.withLock { boards }
+        let hadBoards = !existing.isEmpty
 
         let m = ensureManagerLocked(diag: diag)
         let devs = (m.flatMap { IOHIDManagerCopyDevices($0) as? Set<IOHIDDevice> }) ?? []
         diag?("HID devices with vendor 0x046D: \(devs.count)")
         var found: [Keyboard] = []
+        var keptDevices: [IOHIDDevice] = []
         for d in devs {
             let prod = (IOHIDDeviceGetProperty(d, kIOHIDProductKey as CFString) as? String) ?? "?"
             let pairs = (IOHIDDeviceGetProperty(d, "DeviceUsagePairs" as CFString) as? [[String: Int]]) ?? []
             guard pairs.contains(where: { $0["DeviceUsagePage"] == 0xFF43 }) else {
                 diag?("skip \(prod): no 0xFF43 usage pair")
+                continue
+            }
+            if existing.contains(where: { CFEqual($0.hid.device, d) && !$0.hid.isRemoved }) {
+                keptDevices.append(d)
                 continue
             }
             let h: HIDPPDevice
@@ -693,13 +764,18 @@ final class LogitechBacklight: @unchecked Sendable {
             let flagKey = Self.dirtyKey(h)
             let saved = Self.loadSavedSnapshot(for: h.storageKey)
             let flag = UserDefaults.standard.object(forKey: flagKey) as? Bool
-            let wasDirty = flag ?? (saved != nil && Self.isManualConfig(cfg))
+            let isManual = Self.isManualConfig(cfg)
+            let ownLeftover = isManual && Self.looksLikeOwnEngaged(cfg)
+            let wasDirty = flag ?? (saved != nil && isManual)
             let original: [UInt8]?
             let originNote: String
-            if wasDirty, let saved, Self.isManualConfig(cfg) {
+            if wasDirty, let saved, isManual {
                 original = saved
                 originNote = "original(saved, previous run left it engaged)=\(Self.hex(saved))"
-            } else if wasDirty, Self.isManualConfig(cfg) {
+            } else if ownLeftover, let saved, !Self.isManualConfig(saved) {
+                original = saved
+                originNote = "original(saved, manual config looks like our own)=\(Self.hex(saved))"
+            } else if wasDirty || ownLeftover, isManual {
                 // Left in manual mode by an earlier run and nothing saved: fall back to auto with the
                 // stock durations (dho 3, dhi 6, dpow 60 in 5 s units). Not persisted, it is a guess.
                 var guess = cfg
@@ -715,7 +791,8 @@ final class LogitechBacklight: @unchecked Sendable {
                 originNote = "original(captured)=\(Self.hex(cfg))"
             }
 
-            let leftDirty = wasDirty && Self.isManualConfig(cfg)
+            let leftDirty = (wasDirty || ownLeftover) && isManual
+            if leftDirty { Self.persistEngaged(h, true) }
             found.append(Keyboard(
                 hid: h,
                 feature: fi,
@@ -726,10 +803,18 @@ final class LogitechBacklight: @unchecked Sendable {
                 lastLevel: -1,
                 dirty: leftDirty
             ))
-            Log.write("[logi] \(h.name) (\(h.serial)): BACKLIGHT2 index \(fi), \(levels) levels, live \(Self.hex(cfg)), \(originNote)")
+            Log.write("[logi] \(h.name) (\(h.maskedSerial)): BACKLIGHT2 index \(fi), \(levels) levels, live \(Self.hex(cfg)), \(originNote)")
         }
 
         lock.withLock {
+            let current = boards
+            var merged: [Keyboard] = []
+            for d in keptDevices {
+                if let b = current.first(where: { CFEqual($0.hid.device, d) }) { merged.append(b) }
+            }
+            merged += found
+            for b in current where !merged.contains(where: { $0.hid === b.hid }) { b.hid.close() }
+            found = merged
             boards = found
             refreshAnyStaleLocked()
             updateKnownLocked()
@@ -790,15 +875,22 @@ final class LogitechBacklight: @unchecked Sendable {
             switch result {
             case .success:
                 var acceptedBytes = dBytes
+                var clamped = false
                 if case .success(let rb) = b.hid.requestResult(feature: b.feature, function: 0, timeout: 0.5), rb.count >= 12 {
                     let rbDho = Self.u16LE(rb, 6), rbDhi = Self.u16LE(rb, 8), rbDpow = Self.u16LE(rb, 10)
-                    if rbDho >= 12 { acceptedBytes = Array(rb[6..<12]) }
+                    // The firmware may clamp what it accepted: keep what it reports, or every check would see a drift.
+                    if rbDho > 0, rbDhi > 0, rbDpow > 0, Array(rb[6..<12]) != dBytes {
+                        acceptedBytes = Array(rb[6..<12])
+                        clamped = true
+                    }
                     Log.write("[logi] \(b.hid.name): engaged durations dho=\(rbDho) (\(Int(rbDho) * 5)s) dhi=\(rbDhi) (\(Int(rbDhi) * 5)s) dpow=\(rbDpow) (\(Int(rbDpow) * 5)s) (sent \(v))")
                 } else {
                     Log.write("[logi] \(b.hid.name): engaged durations dho=\(v) (\(Int(v) * 5)s) dhi=\(v) (\(Int(v) * 5)s) dpow=\(dpow) (\(Int(dpow) * 5)s)")
                 }
                 b.engagedDurations = acceptedBytes
-                if idx == 0 || onlyExplicitRejects {
+                b.fallbackDurations = false
+                b.reprobeDelay = 60
+                if idx == 0 || onlyExplicitRejects || clamped {
                     UserDefaults.standard.set(Int(Self.u16LE(acceptedBytes, 0)), forKey: key)
                 }
                 b.lastLevel = level
@@ -819,7 +911,11 @@ final class LogitechBacklight: @unchecked Sendable {
         let p = manualParams(for: b, level: level, durations: fallback)
         switch b.hid.requestResult(feature: b.feature, function: 1, params: p, timeout: reqTimeout) {
         case .success:
+            // Not a verdict on the keyboard: probe again later with growing gaps.
             b.engagedDurations = fallback
+            b.fallbackDurations = true
+            b.reprobeAt = hostNow() + b.reprobeDelay
+            b.reprobeDelay = min(b.reprobeDelay * 2, 3600)
             b.lastLevel = level
             b.dirty = true
             return true
@@ -833,7 +929,8 @@ final class LogitechBacklight: @unchecked Sendable {
     private func sendEngagedLocked(_ i: Int, level: Int, now: Double) -> HIDPPError? {
         let prev = boards[i].lastLevel
         if isSealed { return .timeout(feature: boards[i].feature, function: 1) }
-        if let dBytes = boards[i].engagedDurations {
+        let reprobe = boards[i].fallbackDurations && now >= boards[i].reprobeAt
+        if let dBytes = boards[i].engagedDurations, !reprobe {
             if !boards[i].dirty { Self.persistEngaged(boards[i].hid, true) }
             let p = manualParams(for: boards[i], level: level, durations: dBytes)
             switch boards[i].hid.requestResult(feature: boards[i].feature, function: 1, params: p,
@@ -841,6 +938,7 @@ final class LogitechBacklight: @unchecked Sendable {
             case .success:
                 let doneAt = hostNow()
                 boards[i].lastLevel = level
+                boards[i].lastSentAt = doneAt
                 boards[i].dirty = true
                 boards[i].pendingRestore = false
                 if level != prev { boards[i].lastChangeAt = doneAt }
@@ -852,8 +950,10 @@ final class LogitechBacklight: @unchecked Sendable {
             }
         }
         var probeErr: HIDPPError?
+        if reprobe { boards[i].reprobeAt = hostNow() + boards[i].reprobeDelay }
         if probeAndWrite(board: &boards[i], level: level, errorOut: &probeErr) {
             let doneAt = hostNow()
+            boards[i].lastSentAt = doneAt
             boards[i].pendingRestore = false
             if level != prev { boards[i].lastChangeAt = doneAt }
             noteAwakeLocked(i, level: level, now: doneAt)
@@ -867,6 +967,8 @@ final class LogitechBacklight: @unchecked Sendable {
     /// back and rewrite only if it drifted (mode, level or durations). One short exchange per minute.
     private func housekeeping() {
         let saver = PowerState.shared.saver
+        let kick = keyboardKick.get()
+        if kick { keyboardKick.set(false) }
         lock.lock(); defer { lock.unlock() }
         for i in boards.indices {
             if isSealed { return }
@@ -910,6 +1012,14 @@ final class LogitechBacklight: @unchecked Sendable {
                 if boards[i].stale { boards[i].wakeAttemptedAt = hostNow() }
                 continue
             }
+            // The firmware can switch the lights off on its own idle timer without touching the config the
+            // reads below look at, so rewrite the engaged config now and then, and after input following a quiet spell.
+            let keepaliveEvery = saver ? Self.keepaliveSaver : Self.keepaliveAC
+            if kick || now - boards[i].lastSentAt >= keepaliveEvery {
+                boards[i].lastVerify = now
+                _ = sendEngagedLocked(i, level: boards[i].wantLevel, now: now)
+                continue
+            }
             // On battery a quiet keyboard is checked less often instead of never.
             let quiet = saver && now - boards[i].lastChangeAt >= Self.quietAfter
             guard now - boards[i].lastVerify >= (quiet ? Self.quietVerifyInterval : Self.verifyInterval) else { continue }
@@ -920,7 +1030,7 @@ final class LogitechBacklight: @unchecked Sendable {
                 let want = boards[i].wantLevel
                 let durOK = boards[i].engagedDurations.map { Array(c[6..<12]) == $0 } ?? true
                 if c[0] != 1 || Self.mode(of: c) != 3 || (want >= 0 && Int(c[5]) != want) || !durOK {
-                    Log.write("[logi] \(boards[i].hid.name): drifted (live \(Self.hex(c)), want level \(want)); resent")
+                    logThrottled(key: "drift.\(boards[i].hid.name)", msg: "[logi] \(boards[i].hid.name): drifted (live \(Self.hex(c)), want level \(want)); resent", interval: 60)
                     _ = sendEngagedLocked(i, level: boards[i].wantLevel, now: now)
                 }
             case .success: break
@@ -1000,12 +1110,16 @@ final class LogitechBacklight: @unchecked Sendable {
     /// Synchronous restore for quit / signal paths: seals the writer, bounded wait for the board lock,
     /// short request timeouts, timeouts retried. A board that timed out is not retried by a second call.
     func restoreForQuit() {
-        restore(attempts: 3, timeout: 0.4, lockWait: 1.25, retryTimeouts: true, seal: true)
+        restore(attempts: 3, timeout: 0.4, lockWait: 1.5, retryTimeouts: true, seal: true)
     }
 
     func restore(attempts: Int = 2, timeout: Double = 0.5, lockWait: Double? = nil, retryTimeouts: Bool = true, seal: Bool = false) {
         wcond.lock()
-        if seal { sealedBox.set(true) }
+        if seal {
+            sealedBox.set(true)
+            // A writer request in flight returns at once, so the board lock frees up for the hand-back.
+            for h in hidMirror.get() { h.abortPending() }
+        }
         else if sealedBox.get() { wcond.unlock(); return }   // the quit path owns the hand-back
         wantRelease = false
         target = -1
@@ -1055,11 +1169,11 @@ final class LogitechBacklight: @unchecked Sendable {
         let targetCfg = boards[i].original ?? boards[i].baseConfig
         let p: [UInt8] = [targetCfg[0], targetCfg[1], 0xFF, targetCfg[5],
                           targetCfg[6], targetCfg[7], targetCfg[8], targetCfg[9], targetCfg[10], targetCfg[11]]
-        var result = boards[i].hid.requestResult(feature: boards[i].feature, function: 1, params: p, timeout: timeout)
+        var result = boards[i].hid.requestResult(feature: boards[i].feature, function: 1, params: p, timeout: timeout, bypassAbort: true)
         var tries = 1
         while case .failure(let e) = result, tries < attempts, !e.isDisconnectLike || (retryTimeouts && e.isTimeout) {
             Thread.sleep(forTimeInterval: 0.1)
-            result = boards[i].hid.requestResult(feature: boards[i].feature, function: 1, params: p, timeout: timeout)
+            result = boards[i].hid.requestResult(feature: boards[i].feature, function: 1, params: p, timeout: timeout, bypassAbort: true)
             tries += 1
         }
         switch result {
@@ -1143,6 +1257,13 @@ final class LogitechBacklight: @unchecked Sendable {
         wcond.lock()
         if sealedBox.get() { wcond.unlock(); return }
         let clamped = min(max(perceived, 0), 1)
+        // Same quantized level as the last push, already engaged and nothing pending: the writer has nothing to do.
+        let q = Int((clamped * Float(levelsMirror.get() - 1)).rounded())
+        if engaged, !wantRelease, q == lastPushedLevel.get() {
+            resumePerceived = clamped
+            wcond.unlock(); return
+        }
+        lastPushedLevel.set(q)
         let wasIdle = target < 0 || wantRelease
         target = clamped
         resumePerceived = clamped
@@ -1155,6 +1276,8 @@ final class LogitechBacklight: @unchecked Sendable {
     /// Hands the keyboard back to its own settings (after any pending write).
     func release() {
         wcond.lock()
+        if sealedBox.get() { wcond.unlock(); return }
+        lastPushedLevel.set(-1)
         target = -1
         resumePerceived = -1
         wantRelease = true
@@ -1317,7 +1440,7 @@ final class LogitechBacklight: @unchecked Sendable {
         for b in lb.lock.withLock({ lb.boards }) {
             let origHex = b.original.map(hex) ?? "none"
             let origMode = b.original.map { String(mode(of: $0)) } ?? "none"
-            say("\(b.hid.name) (serial='\(b.hid.serial)'): feature \(b.feature), live \(hex(b.baseConfig)) mode \(mode(of: b.baseConfig)), savedOriginal \(origHex) mode \(origMode)")
+            say("\(b.hid.name) (serial='\(b.hid.maskedSerial)'): feature \(b.feature), live \(hex(b.baseConfig)) mode \(mode(of: b.baseConfig)), savedOriginal \(origHex) mode \(origMode)")
         }
         var allPassed = true
         for b in lb.lock.withLock({ lb.boards }) {
@@ -1334,6 +1457,8 @@ final class LogitechBacklight: @unchecked Sendable {
             say("cached max duration: \(UserDefaults.standard.integer(forKey: maxDurKey(b.hid)))")
         }
         if test && !names.isEmpty {
+            // Mark the keyboards engaged before the first raw write, so an interrupted run is recognised.
+            for b in lb.lock.withLock({ lb.boards }) { persistEngaged(b.hid, true) }
             for b in lb.lock.withLock({ lb.boards }) {
                 let base = b.original ?? b.baseConfig
                 let manual = (base[1] & 0x07) | (0x03 << 3)

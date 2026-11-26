@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-only
+// Copyright 2026 Vijay A. HapticGlow: https://github.com/VA24d/HapticGlow
+// Additional attribution terms under GPLv3 section 7(b): see NOTICE.md.
 // Key Sounds: pack picker, mix controls, interactive mini keyboard, latency readout.
 import SwiftUI
 
@@ -9,12 +12,13 @@ struct SoundsView: View {
     @State private var trigger: KeyboardVisualizer.KeyTrigger?
     @State private var focused = false
     @State private var seq = 0
+    @State private var refocus = 0
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: Theme.Space.xl) {
                 PageHeader(title: "Key Sounds", subtitle: "Mechanical keyboard sounds for every key you press, placed by position.")
-                if AppModel.silentLaunch {
+                if AppModel.silentLaunch && !SnapshotMode.active {
                     ScreenNotice(symbol: "speaker.slash", title: "Key sounds are off for this session",
                                  message: "Key sounds are off for this session (started in test mode). Relaunch HapticGlow to turn them on.",
                                  actionTitle: "Relaunch", action: { relaunchApp() })
@@ -157,7 +161,7 @@ struct SoundsView: View {
                 KeyboardVisualizer(style: .sounds, interactive: true, onKey: { cap in
                     KeySoundEngine.shared.preview(keyCode: cap.keyCode)
                     note(cap)
-                }, trigger: trigger)
+                }, onTap: { refocus &+= 1 }, trigger: trigger)
                 .frame(maxWidth: 760)
                 .frame(maxWidth: .infinity)
                 .padding(8)
@@ -174,11 +178,13 @@ struct SoundsView: View {
                             trigger = .init(keyCode: e.keyCode, seq: seq)
                             note(cap)
                         }
-                    }, onFocusChange: { focused = $0 })
+                    }, onFocusChange: { v in DispatchQueue.main.async { focused = v } }, refocus: refocus)
                 )
                 .animation(Theme.snappy, value: focused)
                 Text(focused ? "Type on your keyboard to try it." : "Type to try it. Click here to focus.")
                     .font(Theme.Font.caption).foregroundStyle(Theme.textTertiary)
+                    .contentShape(Rectangle())
+                    .onTapGesture { refocus &+= 1 }
                 Rectangle().fill(Theme.hairline).frame(height: 0.5)
                 HStack(spacing: Theme.Space.l) {
                     PanReadout(tapped: tapped)

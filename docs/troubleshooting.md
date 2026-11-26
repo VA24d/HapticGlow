@@ -62,4 +62,4 @@ When a Bluetooth headset opens its microphone, macOS drops it to the 8 or 16 kHz
 
 ## Still stuck
 
-Open an issue at https://github.com/VA24d/HapticGlow/issues with your macOS version, Mac model and the last 50 lines of the log.
+Open an issue at https://github.com/VA24d/HapticGlow/issues with your macOS version, Mac model and the last 50 lines of the log. Read the log before posting it: it can contain device names, the last 4 characters of a keyboard serial number and file or app names. Remove anything you do not want public.

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-only
+// Copyright 2026 Vijay A. HapticGlow: https://github.com/VA24d/HapticGlow
+// Additional attribution terms under GPLv3 section 7(b): see NOTICE.md.
 // Listen-only CGEventTap on a dedicated userInteractive thread. Events go straight to KeyBus in the
 // callback (no queue hops). Design after Clacky's listener (session tap, own run loop) and Thock's
 // device-specific modifier masks (both MIT); re-enable logic follows Thock.
@@ -5,6 +8,7 @@ import Foundation
 import AppKit
 import CoreGraphics
 import ApplicationServices
+import Synchronization
 
 private let nxSystemDefinedTypeRaw: UInt32 = 14
 
@@ -73,6 +77,8 @@ final class KeyMonitor: @unchecked Sendable {
     private var runLoop: CFRunLoop?
     private var thread: Thread?
     private let ctl = UnfairLock()
+    /// Bumped on every start and stop; the main-queue publish of NX_SYSDEFINED keys drops events from an older run.
+    fileprivate let runGen = Atomic<Int>(0)
 
     private func setStatus(_ s: EngineStatus) {
         let changed = state.get() != s
@@ -86,6 +92,7 @@ final class KeyMonitor: @unchecked Sendable {
         if thread != nil, tap != nil { return true }
         guard Self.hasPermission else { setStatus(.needsPermission("Input Monitoring")); return false }
         setStatus(.starting)
+        runGen.add(1, ordering: .acquiringAndReleasing)
         let ready = DispatchSemaphore(value: 0)
         let gate = StartGate()
         let th = Thread { [unowned self] in self.threadMain(ready: ready, gate: gate) }
@@ -106,9 +113,12 @@ final class KeyMonitor: @unchecked Sendable {
 
     func stop() {
         ctl.lock(); defer { ctl.unlock() }
-        if let t = tap { CGEvent.tapEnable(tap: t, enable: false) }
-        if let rl = runLoop { CFRunLoopStop(rl) }
+        // Clear the tap first (under the lock) so reenable() is a no-op while the port is torn down.
+        runGen.add(1, ordering: .acquiringAndReleasing)
+        let t = tap, rl = runLoop
         tap = nil; runLoop = nil; thread = nil
+        if let t { CGEvent.tapEnable(tap: t, enable: false) }
+        if let rl { CFRunLoopStop(rl) }
         setStatus(.stopped)
     }
 
@@ -155,8 +165,8 @@ final class KeyMonitor: @unchecked Sendable {
     }
 
     fileprivate func reenable() {
-        ctl.lock(); let t = tap; ctl.unlock()
-        if let t { CGEvent.tapEnable(tap: t, enable: true) }
+        ctl.lock(); defer { ctl.unlock() }
+        if let t = tap { CGEvent.tapEnable(tap: t, enable: true) }
     }
 }
 
@@ -184,8 +194,9 @@ private let dupLock = NSLock()
     if rep { return false }
     let i = Int(code & 0xFF) * 2 + (down ? 1 : 0)
     dupLock.lock(); defer { dupLock.unlock() }
-    let dup = now - lastEmit[i] < dupWindow
-    lastEmit[i] = now
+    let dup = abs(now - lastEmit[i]) < dupWindow
+    // A main-queue hop delivers older timestamps late; only ever move the stamp forward.
+    if now > lastEmit[i] { lastEmit[i] = now }
     return dup
 }
 
@@ -204,8 +215,11 @@ private func keyTapCallback(proxy: CGEventTapProxy, type: CGEventType, event: CG
             // which asserts the main queue and crashed the app (EXC_BREAKPOINT on HapticGlow.KeyTap).
             // Decode a copy there; the key time is taken here so sound timing is unaffected.
             let now = hostNow()
+            let mon = info.map { Unmanaged<KeyMonitor>.fromOpaque($0).takeUnretainedValue() }
+            let gen = mon?.runGen.load(ordering: .acquiring) ?? 0
             DispatchQueue.main.async {
-                guard let ns = NSEvent(cgEvent: copy), ns.type == .systemDefined,
+                guard let mon, mon.runGen.load(ordering: .acquiring) == gen,
+                      let ns = NSEvent(cgEvent: copy), ns.type == .systemDefined,
                       let d = KeyMonitor.decodeSystemDefined(subtype: ns.subtype.rawValue, data1: ns.data1) else { return }
                 if isDuplicate(code: d.keyCode, down: d.down, rep: d.isRepeat, now: now) { return }
                 let pos = KeyLayout.position(for: d.keyCode)

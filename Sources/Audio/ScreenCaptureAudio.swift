@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-only
+// Copyright 2026 Vijay A. HapticGlow: https://github.com/VA24d/HapticGlow
+// Additional attribution terms under GPLv3 section 7(b): see NOTICE.md.
 // ScreenCaptureKit system-audio capture: the literal screen-recording API (SCStream audio).
 // Public API mirrors SystemAudioTap so AppModel can switch backends (protocol AudioCapture).
 // Audio-only use: a 2x2 px, 1 fps video stream is requested (SCK needs a display filter) and dropped.
@@ -6,6 +9,7 @@ import Foundation
 import CoreMedia
 import CoreGraphics
 import AudioToolbox
+import Synchronization
 
 final class ScreenCaptureAudio: NSObject, @unchecked Sendable {
     static let shared = ScreenCaptureAudio()
@@ -45,8 +49,8 @@ final class ScreenCaptureAudio: NSObject, @unchecked Sendable {
 
     // Sample queue state: written only on `sampleQueue`, read (benignly racy) by the watchdog.
     private let sampleQueue = DispatchQueue(label: "hapticglow.sck.audio", qos: .userInteractive)
-    private var callbacks: UInt64 = 0
-    private var loudCallbacks: UInt64 = 0
+    private let callbacks = Atomic<UInt64>(0)
+    private let loudCallbacks = Atomic<UInt64>(0)
     private var quietFrames = 0
     private var mono = UnsafeMutablePointer<Float>.allocate(capacity: 16384)
     private var monoCap = 16384
@@ -155,7 +159,7 @@ final class ScreenCaptureAudio: NSObject, @unchecked Sendable {
         let s = SCStream(filter: filter, configuration: cfg, delegate: self)
         do { try s.addStreamOutput(self, type: .audio, sampleHandlerQueue: sampleQueue) }
         catch { handleFailure(error, g); return }
-        callbacks = 0; loudCallbacks = 0; lastCount = 0; everFlowed = false
+        callbacks.store(0, ordering: .relaxed); loudCallbacks.store(0, ordering: .relaxed); lastCount = 0; everFlowed = false
         sampleQueue.sync { sinkSnap = sink }
         stream = s
         s.startCapture { [weak self] err in
@@ -209,7 +213,7 @@ final class ScreenCaptureAudio: NSObject, @unchecked Sendable {
     private func evaluate() {
         guard desired else { return }
         let now = hostNow()
-        let c = callbacks, loud = loudCallbacks
+        let c = callbacks.load(ordering: .relaxed), loud = loudCallbacks.load(ordering: .relaxed)
         let dt = max(0.001, now - lastTick)
         lock.withLock { _rate = Double(c &- lastCount) / dt }
         let hadBuffers = c != lastCount
@@ -275,8 +279,8 @@ final class ScreenCaptureAudio: NSObject, @unchecked Sendable {
                 if n < frames { for i in n..<frames { mono[i] = 0 } }
             }
         }
-        callbacks &+= 1
-        if peak > silenceThreshold { loudCallbacks &+= 1 }
+        callbacks.wrappingAdd(1, ordering: .relaxed)
+        if peak > silenceThreshold { loudCallbacks.wrappingAdd(1, ordering: .relaxed) }
         let sr = asbd.mSampleRate > 0 ? asbd.mSampleRate : 48000
         // Silent output (nothing playing): stop analysing after 0.6 s; the first sound resumes it at once.
         if peak < 1e-7 {

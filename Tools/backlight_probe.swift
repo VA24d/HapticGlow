@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-only
+// Copyright 2026 Vijay A. HapticGlow: https://github.com/VA24d/HapticGlow
+// Additional attribution terms under GPLv3 section 7(b): see NOTICE.md.
 // Backlight hardware probe (visual only, no sound). Usage: backlight_probe <phase>
 // phases: info | hid | curve | step | track | cost
 import Foundation

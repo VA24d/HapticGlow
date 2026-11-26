@@ -1,5 +1,8 @@
+// SPDX-License-Identifier: GPL-3.0-only
+// Copyright 2026 Vijay A. HapticGlow: https://github.com/VA24d/HapticGlow
+// Additional attribution terms under GPLv3 section 7(b): see NOTICE.md.
 // AppModel — the single observable the UI binds to. Owns persistence and engine wiring.
-// FROZEN API for UI agents: property and method names below are stable.
+// Stable interface between the engines and the UI: the property and method names below are what the views use.
 import Foundation
 import AppKit
 import Observation
@@ -306,8 +309,7 @@ final class AppModel {
         KeyMonitor.shared.stop()
         SystemAudioTap.shared.shutdown()
         ScreenCaptureAudio.shared.shutdown()
-        BacklightDriver.shared.restore()
-        LogitechBacklight.shared.restoreForQuit()
+        QuitCoordinator.handBack()
     }
 
     func refreshStatuses() {

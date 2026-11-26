@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-only
+// Copyright 2026 Vijay A. HapticGlow: https://github.com/VA24d/HapticGlow
+// Additional attribution terms under GPLv3 section 7(b): see NOTICE.md.
 // Haptics Lab: manual low-level primitives. All output goes through TrackpadMotor, whose governor enforces
 // the hard limits (Apple's own amplitude table, rate, duty, stall guard). The sliders here only mirror them.
 import SwiftUI

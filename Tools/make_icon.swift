@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-only
+// Copyright 2026 Vijay A. HapticGlow: https://github.com/VA24d/HapticGlow
+// Additional attribution terms under GPLv3 section 7(b): see NOTICE.md.
 // HapticGlow app icon generator. Usage: swift make_icon.swift <outdir>
 // Writes AppIcon.iconset/ (all macOS sizes) and icon-1024.png into <outdir>.
 // Each size is rendered straight from vector at that pixel size.

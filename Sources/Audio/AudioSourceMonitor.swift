@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-only
+// Copyright 2026 Vijay A. HapticGlow: https://github.com/VA24d/HapticGlow
+// Additional attribution terms under GPLv3 section 7(b): see NOTICE.md.
 // HapticGlow - Auto haptic source: decides Music or Movie from what is actually playing.
 //
 // Pipeline (all event driven, nothing runs while haptics or Auto are off):
@@ -233,7 +236,9 @@ struct SpeechMusicAccumulator: Sendable {
     private var bpmFrames = 0
     private var firstOnset: UInt64 = 0, lastOnset: UInt64 = 0, haveOnset = false
     private var bucketStart = -1.0, bucketSum: Float = 0, bucketN = 0
-    private var levels: [Float] = []
+    /// Fixed storage (64 buckets) so add() never allocates on the audio thread.
+    private var levelBuf = [Float](repeating: 0, count: 64)
+    private var levelN = 0
 
     @inline(__always) private static func lin(_ x: Float) -> Float { powf(10, 2.4 * (max(0, min(1, x)) - 1)) }
 
@@ -246,7 +251,7 @@ struct SpeechMusicAccumulator: Sendable {
             bucketSum += f.silent ? 0 : f.level
             bucketN += 1
             if f.time - bucketStart >= 0.05 {
-                if levels.count < 64 { levels.append(bucketSum / Float(max(1, bucketN))) }
+                if levelN < 64 { levelBuf[levelN] = bucketSum / Float(max(1, bucketN)); levelN += 1 }
                 bucketStart = f.time; bucketSum = 0; bucketN = 0
             }
         }
@@ -261,15 +266,16 @@ struct SpeechMusicAccumulator: Sendable {
 
     func verdict(windowSeconds: Double) -> SpeechVerdict {
         let active = frames - silent
-        guard frames > 8, active >= 8, Double(active) >= 0.4 * Double(frames), levels.count >= 8 else { return .unsure }
+        guard frames > 8, active >= 8, Double(active) >= 0.4 * Double(frames), levelN >= 8 else { return .unsure }
         let total = low + voice + high + 1e-9
         let voiceShare = voice / total, lowShare = low / total
         let onsetRate = Double(lastOnset &- firstOnset) / max(0.25, windowSeconds)
         let hasTempo = Double(bpmFrames) > 0.5 * Double(active)
         var mod: Float = 0
-        for i in 1..<levels.count { mod += abs(levels[i] - levels[i - 1]) }
-        mod /= Float(levels.count - 1)
-        let meanLevel = levels.reduce(0, +) / Float(levels.count)
+        var sum = levelBuf[0]
+        for i in 1..<levelN { mod += abs(levelBuf[i] - levelBuf[i - 1]); sum += levelBuf[i] }
+        mod /= Float(levelN - 1)
+        let meanLevel = sum / Float(levelN)
         let modulation = mod / (meanLevel + 0.05)
 
         var sp: Float = 0, mu: Float = 0
@@ -312,7 +318,17 @@ final class AudioSourceMonitor: @unchecked Sendable {
     static let shared = AudioSourceMonitor()
 
     /// Called on the monitor's queue whenever the status changes.
-    var onStatus: (@Sendable (AutoSourceStatus) -> Void)?
+    var onStatus: (@Sendable (AutoSourceStatus) -> Void)? {
+        get { cbLock.withLock { _onStatus } }
+        set { cbLock.withLock { _onStatus = newValue } }
+    }
+    private let cbLock = UnfairLock()
+    private var _onStatus: (@Sendable (AutoSourceStatus) -> Void)?
+    // Frontmost app, cached from the main queue (NSWorkspace is main-thread API).
+    private let fmLock = UnfairLock()
+    private var cachedFrontmost: String?
+    // Browser bundle id -> deadline of the tab query in flight (one hung browser must not block others).
+    private var tabInFlight: [String: Double] = [:]
 
     // Optional hooks for offline unit probes (nil in production).
     var processProvider: (() -> [(pid: Int32, bundle: String)])?
@@ -407,9 +423,15 @@ final class AudioSourceMonitor: @unchecked Sendable {
             let blk: AudioObjectPropertyListenerBlock = { [weak self] _, _ in self?.scheduleRefresh() }
             sysListener = blk
             AudioObjectAddPropertyListenerBlock(AudioObjectID(kAudioObjectSystemObject), &a, q, blk)
-            appObserver = NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: nil) { [weak self] n in
+            appObserver = NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main) { [weak self] n in
                 let bid = (n.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication)?.bundleIdentifier
+                self?.fmLock.withLock { self?.cachedFrontmost = bid }
                 self?.q.async { self?.onAppActivated(bid) }
+            }
+            DispatchQueue.main.async { [weak self] in
+                let bid = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
+                self?.fmLock.withLock { self?.cachedFrontmost = bid }
+                self?.q.async { self?.reevaluate() }
             }
             powerObserver = NotificationCenter.default.addObserver(forName: PowerState.didChange, object: nil, queue: nil) { [weak self] _ in
                 self?.q.async { self?.onPowerChanged() }
@@ -439,6 +461,7 @@ final class AudioSourceMonitor: @unchecked Sendable {
         refreshWork?.cancel(); recheckWork?.cancel()
         stopClassifier()
         deniedBrowsers.removeAll()
+        tabInFlight = [:]
         procs = []; tabInfo = [:]; queriedBrowserSigs = [:]; lastTabQueryAt = [:]; firstSeen = [:]
         lastBasis = .idle; clsMode = nil; clsVerdict = .unsure; unsureStreak = 0; silentSkips = 0
         hyst.clearPending()
@@ -561,7 +584,7 @@ final class AudioSourceMonitor: @unchecked Sendable {
 
     private func currentFrontmost() -> String? {
         if let p = frontmostProvider { return p() }
-        return NSWorkspace.shared.frontmostApplication?.bundleIdentifier
+        return fmLock.withLock { cachedFrontmost }
     }
 
     /// Browser that actually owns the tab to ask (WebKit helpers belong to whichever Safari-like app runs).
@@ -663,7 +686,13 @@ final class AudioSourceMonitor: @unchecked Sendable {
     private func manageTimers() {
         let infos = sourceInfos(frontmost: currentFrontmost())
         let res = AutoSourceResolver.resolve(infos, frontmost: nil)
-        if res.basis == .classifier { startClassifier() } else { stopClassifier() }
+        if res.basis == .classifier {
+            // A tab query for the only unknown browser sources is still running: its answer may be a known site.
+            let now = hostNow()
+            let unknown = infos.filter { $0.kind == .unknown }
+            if !unknown.isEmpty, unknown.allSatisfy({ (tabInFlight[$0.appID] ?? 0) > now }) { return }
+            startClassifier()
+        } else { stopClassifier() }
     }
 
     /// Queries each playing non-Firefox browser at most once per source change (never on a repeating timer).
@@ -692,6 +721,7 @@ final class AudioSourceMonitor: @unchecked Sendable {
         let now = hostNow()
         for t in targets {
             guard !deniedBrowsers.contains(t.id) else { continue }
+            if (tabInFlight[t.id] ?? 0) > now { continue }
             if force {
                 if now - (lastTabQueryAt[t.id] ?? 0) < 1.0 { continue }
             } else {
@@ -700,31 +730,30 @@ final class AudioSourceMonitor: @unchecked Sendable {
             queriedBrowserSigs[t.id] = t.sig
             lastTabQueryAt[t.id] = now
             statLock.withLock { _tabQueries += 1 }
+            tabInFlight[t.id] = now + 8
             let querier = self.tabQuerier
             let applyResult: (TabResult) -> Void = { [weak self] r in
                 guard let self, self.listening else { return }
+                self.tabInFlight[t.id] = nil
+                var changed = false
                 switch r {
                 case .tab(let url, let title):
                     self.deniedBrowsers.remove(t.id)
-                    let changed = self.tabInfo[t.id]?.url != url
+                    changed = self.tabInfo[t.id]?.url != url
                     self.tabInfo[t.id] = (url, title, hostNow())
-                    if changed {
-                        self.manageTimers()
-                        self.reevaluate()
-                    }
                 case .denied:
                     if self.deniedBrowsers.insert(t.id).inserted {
                         self.tabInfo[t.id] = nil
-                        self.manageTimers()
-                        self.reevaluate()
+                        changed = true
                     }
                 case .unavailable:
                     if self.tabInfo[t.id] != nil {
                         self.tabInfo[t.id] = nil
-                        self.manageTimers()
-                        self.reevaluate()
+                        changed = true
                     }
                 }
+                self.manageTimers()   // also releases a classifier start deferred by this query
+                if changed { self.reevaluate() }
             }
             if let querier {
                 applyResult(querier(t.id, t.family))
@@ -759,13 +788,15 @@ final class AudioSourceMonitor: @unchecked Sendable {
             if st != OSStatus(procNotFound) { UserDefaults.standard.set(true, forKey: key) }
         }
         if st != noErr { return st == OSStatus(procNotFound) ? .unavailable : .denied }
-        let src: String
+        let body: String
         switch family {
         case .safari:
-            src = "tell application id \"\(bundle)\" to return (URL of current tab of front window) & linefeed & (name of current tab of front window)"
+            body = "return (URL of current tab of front window) & linefeed & (name of current tab of front window)"
         default:
-            src = "tell application id \"\(bundle)\" to return (URL of active tab of front window) & linefeed & (title of active tab of front window)"
+            body = "return (URL of active tab of front window) & linefeed & (title of active tab of front window)"
         }
+        // Short Apple Event timeout (default is 2 minutes) so one hung browser cannot stall the serial script queue.
+        let src = "with timeout of 3 seconds\ntell application id \"\(bundle)\"\n\(body)\nend tell\nend timeout"
         guard let script = NSAppleScript(source: src) else { return .unavailable }
         var err: NSDictionary?
         let r = script.executeAndReturnError(&err)
