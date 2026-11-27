@@ -89,6 +89,7 @@ Shows what HapticGlow hears and what it does with it.
 - **Audio source.** *System Audio Tap* is the default and has the lowest latency. *Screen Capture Audio* is a fallback that needs Screen Recording permission instead.
 - **Status.** Capture callbacks, sample rate and analyzer state, with live level and onset meters.
 - **Sync delay.** Your output device plays sound after the Mac captures it, and Bluetooth adds roughly 150 to 250 ms. The page shows the delay in use and how it was found.
+- **Measure with microphone.** In *Adjust*, this button times your speakers for you. Play music or a video through the Mac's speakers or a monitor, keep the room quiet and press it. HapticGlow listens through the built-in microphone for about 6 seconds, compares that with the audio the Mac sent out, and shows a result such as "Measured 112 ms. Reported 25 ms." *Apply* then sets the fine-tune for that output so the delay matches. If the result is unclear (too quiet, too much room noise, or nothing playing) it says why and changes nothing. It cannot work with headphones or Bluetooth, because the microphone cannot hear them. The microphone is used only while you measure; macOS asks for permission the first time, the audio is analysed in memory and never stored or sent, and your default input device is left alone.
 
 ## Permissions
 
@@ -100,7 +101,7 @@ Shows the three permissions with their current state, a button to request each o
 - **Appearance.** Follow the system, or force light or dark.
 - **Onset sensitivity.** How readily the analyzer calls a kick.
 - **Now playing.** Turn genre presets on or off, and forget saved songs.
-- **Sync.** *Auto (device latency)* uses the delay your output device reports. *Fine-tune* shifts the glow and haptics by up to 300 ms earlier or later. If the light flashes before you hear the beat, move it later.
+- **Sync.** *Auto (device latency)* uses the delay your output device reports. *Fine-tune* shifts the glow and haptics by up to 300 ms earlier or later. If the light flashes before you hear the beat, move it later. *Measure with microphone* in the Audio Input page's Adjust panel can find the value for you.
 - **Restore keyboard backlight.** Puts brightness and auto-brightness back as macOS had them.
 - **Log file** location, and **Welcome tour** replay.
 

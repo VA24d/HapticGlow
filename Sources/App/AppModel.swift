@@ -218,11 +218,15 @@ final class AppModel {
         BacklightDriver.recoverIfNeeded()
         pushSync()
         OutputLatency.shared.start()
+        _ = MicSyncTapRing.shared   // create off the realtime thread
         FeatureBus.shared.cutoffHz = haptic.cutoffHz
         FeatureBus.shared.sensitivity = onsetSensitivity
 
         for src in [SystemAudioTap.shared as AudioCapture, ScreenCaptureAudio.shared as AudioCapture] {
-        src.sink = { ptr, n, sr in AudioAnalyzer.shared.process(ptr, count: n, sampleRate: sr) }
+        src.sink = { ptr, n, sr in
+            AudioAnalyzer.shared.process(ptr, count: n, sampleRate: sr)
+            MicSyncTapRing.shared.push(ptr, n, sr)   // no-op unless a microphone measurement is running
+        }
         src.onStateChange = { [weak self] s in
             Task { @MainActor in
                 guard let self, src === self.capture else { return }
