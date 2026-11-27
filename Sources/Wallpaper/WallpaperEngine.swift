@@ -24,6 +24,18 @@ final class DesktopWindow: NSWindow {
         animationBehavior = .none
         setFrame(screen.frame, display: false)
     }
+
+    /// AppKit nudges borderless windows back inside the main screen; a desktop window must stay exactly where it is.
+    override func constrainFrameRect(_ frameRect: NSRect, to screen: NSScreen?) -> NSRect { frameRect }
+
+    /// Puts the window on `screen` in global coordinates (origin is the screen's, not the main screen's).
+    /// Set again after ordering, because ordering a window in can move it to the main screen.
+    func place(on screen: NSScreen) {
+        let f = screen.frame
+        if frame != f { setFrame(f, display: true) }
+        if frame.origin != f.origin { setFrameOrigin(f.origin) }
+        if let v = contentView, v.frame.size != f.size || v.frame.origin != .zero { v.frame = NSRect(origin: .zero, size: f.size) }
+    }
 }
 
 @MainActor
@@ -87,7 +99,8 @@ final class WallpaperEngine {
         stopObserving()
         playlistTimer?.invalidate(); playlistTimer = nil
         stillTasks.values.forEach { $0.cancel() }; stillTasks = [:]
-        for (_, s) in slots { s.surface.setPlaying(false, showStill: false); s.window.orderOut(nil); s.window.close() }
+        for (_, s) in slots { s.surface.setPlaying(false, showStill: false); s.surface.shutdown(); s.window.orderOut(nil); s.window.close() }
+        loggedState = [:]; lastSyncedFrame = [:]; lastPlaybackLog = nil
         slots = [:]
         isActive = false
         displayCount = 0
@@ -99,27 +112,45 @@ final class WallpaperEngine {
 
     private func itemID(for key: String) -> String? { config.perDisplay[key] ?? config.itemID }
 
+    private var loggedState: [String: String] = [:]
+    private var lastPlaybackLog: String?
+
+    private func logDisplay(_ key: String, _ screen: NSScreen, item: WallpaperInfo, fit: WallpaperFit, px: CGSize, window: NSWindow) {
+        let f = screen.frame
+        let line = "\(screen.localizedName) frame=\(Int(f.minX)),\(Int(f.minY)) \(Int(f.width))x\(Int(f.height)) scale=\(screen.backingScaleFactor) "
+            + "px=\(Int(px.width))x\(Int(px.height)) item=\(item.title) (\(item.kind.rawValue)) fit=\(fit.rawValue) "
+            + "window=\(window.frame == f ? "ok" : "MISPLACED \(window.frame)")"
+        if loggedState[key] != line { loggedState[key] = line; Log.write("[wallpaper] display \(key.prefix(8)) \(line)") }
+    }
+
     private func reconcile(forceStills: Bool = false) {
         var seen = Set<String>()
         for screen in NSScreen.screens {
             guard let key = DisplayKey.of(screen) else { continue }
             seen.insert(key)
             guard let id = itemID(for: key), let item = library.item(id) else {
-                if let s = slots[key] { s.window.orderOut(nil); s.window.close(); slots[key] = nil }
+                if let s = slots[key] {
+                    s.surface.shutdown(); s.window.orderOut(nil); s.window.close(); slots[key] = nil
+                    Log.write("[wallpaper] display \(key.prefix(8)) \(screen.localizedName): no item assigned, window removed")
+                }
+                loggedState[key] = nil
                 continue
             }
             let fit = config.fitOverrides[id] ?? item.defaultFit
             let backing = screen.backingScaleFactor
-            let maxPx = Int(max(screen.frame.width, screen.frame.height) * backing)
-            let sig = "\(id)|\(fit.rawValue)|\(config.frameRateCap)|\(maxPx)"
+            let px = CGSize(width: (screen.frame.width * backing).rounded(), height: (screen.frame.height * backing).rounded())
+            let sig = "\(id)|\(fit.rawValue)|\(config.frameRateCap)|\(Int(px.width))x\(Int(px.height))|\(backing)"
             if var slot = slots[key] {
-                slot.window.setFrame(screen.frame, display: true)
+                slot.window.place(on: screen)
+                if !slot.window.isVisible { slot.window.orderBack(nil); slot.window.place(on: screen) }
                 if slot.signature != sig || forceStills {
                     if slot.signature != sig {
                         slot.surface.setPlaying(false, showStill: false)
-                        slot.surface = makeSurface(item, fit: fit, maxPx: maxPx, window: slot.window)
+                        slot.surface.shutdown()
+                        slot.surface = makeSurface(item, fit: fit, screenPixels: px, window: slot.window)
                         slot.signature = sig
                     }
+                    slot.frame = screen.frame
                     slots[key] = slot
                     syncStill(screen: screen, key: key, item: item, fit: fit)
                 } else {
@@ -127,25 +158,31 @@ final class WallpaperEngine {
                     slots[key] = slot
                     if lastSyncedFrame[key] != screen.frame { syncStill(screen: screen, key: key, item: item, fit: fit) }
                 }
+                logDisplay(key, screen, item: item, fit: fit, px: px, window: slot.window)
             } else {
                 let w = DesktopWindow(screen: screen)
-                let surface = makeSurface(item, fit: fit, maxPx: maxPx, window: w)
+                let surface = makeSurface(item, fit: fit, screenPixels: px, window: w)
                 slots[key] = Slot(window: w, surface: surface, signature: sig, frame: screen.frame)
                 w.orderBack(nil)
+                w.place(on: screen)
                 syncStill(screen: screen, key: key, item: item, fit: fit)
+                logDisplay(key, screen, item: item, fit: fit, px: px, window: w)
             }
         }
         for key in slots.keys where !seen.contains(key) {
-            if let s = slots[key] { s.surface.setPlaying(false, showStill: false); s.window.orderOut(nil); s.window.close() }
+            if let s = slots[key] { s.surface.setPlaying(false, showStill: false); s.surface.shutdown(); s.window.orderOut(nil); s.window.close() }
             slots[key] = nil
             lastSyncedFrame[key] = nil
+            loggedState[key] = nil
+            stillTasks[key]?.cancel(); stillTasks[key] = nil
+            Log.write("[wallpaper] display \(key.prefix(8)) disconnected, window removed")
         }
         displayCount = slots.count
     }
 
-    private func makeSurface(_ item: WallpaperInfo, fit: WallpaperFit, maxPx: Int, window: DesktopWindow) -> WallpaperSurface {
+    private func makeSurface(_ item: WallpaperInfo, fit: WallpaperFit, screenPixels: CGSize, window: DesktopWindow) -> WallpaperSurface {
         let v = WallpaperSurface(info: item, mediaURL: library.mediaURL(item), stillURL: library.stillURL(item.id),
-                                 fit: fit, fpsCap: config.frameRateCap, screenMaxPixel: maxPx)
+                                 fit: fit, fpsCap: config.frameRateCap, screenPixels: screenPixels)
         window.contentView = v
         v.frame = NSRect(origin: .zero, size: window.frame.size)
         return v
@@ -163,7 +200,7 @@ final class WallpaperEngine {
         DesktopPictureSync.backUpIfNeeded(screen: screen, key: key, libraryRoot: library.root)
         let stillURL = library.stillURL(item.id)
         let dir = library.folder(item.id)
-        let px = CGSize(width: screen.frame.width * screen.backingScaleFactor, height: screen.frame.height * screen.backingScaleFactor)
+        let px = CGSize(width: (screen.frame.width * screen.backingScaleFactor).rounded(), height: (screen.frame.height * screen.backingScaleFactor).rounded())
         let backing = screen.backingScaleFactor
         stillTasks[key]?.cancel()
         stillTasks[key] = Task { [weak self] in
@@ -172,7 +209,7 @@ final class WallpaperEngine {
                       let still = CGImageSourceCreateImageAtIndex(src, 0, nil),
                       let img = StillComposer.compose(still: still, fit: fit, pixelSize: px, backing: backing, edge: EdgeColor.of(still)) else { return nil }
                 // A new name each time: the system caches desktop pictures by URL.
-                let prefix = "lock-\(Int(px.width))x\(Int(px.height))"
+                let prefix = "lock-\(key.prefix(8))-\(Int(px.width))x\(Int(px.height))"
                 for f in (try? FileManager.default.contentsOfDirectory(atPath: dir.path)) ?? [] where f.hasPrefix(prefix) {
                     try? FileManager.default.removeItem(at: dir.appendingPathComponent(f))
                 }
@@ -185,7 +222,10 @@ final class WallpaperEngine {
                 guard self.isActive, self.config.syncLockScreen,
                       let scr = NSScreen.screens.first(where: { DisplayKey.of($0) == key }) else { return }
                 do { try DesktopPictureSync.setPicture(url, screen: scr); self.lastError = nil }
-                catch { self.lastError = "Could not set the lock screen picture: \(error.localizedDescription)" }
+                catch {
+                    self.lastError = "Could not set the lock screen picture: \(error.localizedDescription)"
+                    Log.write("[wallpaper] desktop picture set failed for \(scr.localizedName): \(error.localizedDescription)")
+                }
             }
         }
     }
@@ -218,6 +258,10 @@ final class WallpaperEngine {
         }
         let ws = NSWorkspace.shared.notificationCenter
         add(NotificationCenter.default, NSApplication.didChangeScreenParametersNotification) { [weak self] _ in self?.reconcile(); self?.refreshPlayback() }
+        add(NotificationCenter.default, NSWindow.didChangeBackingPropertiesNotification) { [weak self] n in
+            guard let self, let w = n.object as? NSWindow, self.slots.values.contains(where: { $0.window === w }) else { return }
+            self.reconcile(); self.refreshPlayback()
+        }
         add(NotificationCenter.default, NSWindow.didChangeOcclusionStateNotification) { [weak self] n in self?.occlusionChanged(n.object as? NSWindow) }
         add(ws, NSWorkspace.screensDidSleepNotification) { [weak self] _ in self?.set(.displaySleep, true) }
         add(ws, NSWorkspace.screensDidWakeNotification) { [weak self] _ in self?.set(.displaySleep, false) }
@@ -260,6 +304,10 @@ final class WallpaperEngine {
             s.surface.setPlaying(!hold, showStill: gate.showsStill)
             _ = key
         }
+        let state = slots.keys.sorted().map { k in
+            "\(k.prefix(8))=" + ((gate.isPaused || (config.pauseWhenCovered && slots[k]?.covered == true)) ? "held" : "playing")
+        }.joined(separator: " ") + (gate.summary.map { " (\($0))" } ?? "")
+        if state != lastPlaybackLog { lastPlaybackLog = state; Log.write("[wallpaper] playback \(state)") }
         if let g = gate.summary { pauseSummary = "Paused: \(g)" }
         else if !slots.isEmpty, covered == slots.count { pauseSummary = "Paused: \(PauseReason.covered.text)" }
         else if covered > 0 { pauseSummary = "Paused on \(covered) of \(slots.count) displays: covered" }

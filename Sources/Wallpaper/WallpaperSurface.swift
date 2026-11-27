@@ -1,37 +1,71 @@
 // SPDX-License-Identifier: GPL-3.0-only
 // Copyright 2026 Vijay A. HapticGlow: https://github.com/VA24d/HapticGlow
 // Additional attribution terms under GPLv3 section 7(b): see NOTICE.md.
-// One wallpaper drawn into a view: still image, animated image (timer driven, capped) or looping muted video.
+// One wallpaper drawn into a view: still image, animated image (display-link driven, capped) or looping muted video.
 import AppKit
 import AVFoundation
 import ImageIO
 
 /// Decoded animation: frame delays are read up front (cheap); frames are decoded on demand at a bounded size
-/// and cached only while the whole loop fits the memory budget.
+/// and cached only while the whole loop fits the memory budget. One instance is shared by every display
+/// that shows the same file at the same decode size (see `shared`), so two screens never decode twice.
 final class FrameSequence: @unchecked Sendable {
     let source: CGImageSource
     let count: Int
     let delays: [Double]
     let pixelSize: CGSize
     private let maxPixel: Int
+    private let nativeMax: Int
+    private let rotated: Bool
     private let cacheAll: Bool
     private let lock = NSLock()
     private var cache: [Int: CGImage] = [:]
+    private var users = 0
 
     static let cacheBudget = 96 * 1024 * 1024
 
-    init?(url: URL, screenMaxPixel: Int) {
-        guard let src = CGImageSourceCreateWithURL(url as CFURL, nil) else { return nil }
+    private static let poolLock = NSLock()
+    private static let pool = NSMapTable<NSString, FrameSequence>(keyOptions: .copyIn, valueOptions: .weakMemory)
+
+    /// The decoder for this file at the size a screen of `screenMaxPixel` needs. Reused while any surface still holds it.
+    static func shared(url: URL, screenMaxPixel: Int) -> FrameSequence? {
+        guard let src = CGImageSourceCreateWithURL(url as CFURL, nil),
+              let p = CGImageSourceCopyPropertiesAtIndex(src, 0, nil) as? [CFString: Any],
+              let w = p[kCGImagePropertyPixelWidth] as? Int, let h = p[kCGImagePropertyPixelHeight] as? Int, w > 0, h > 0 else { return nil }
+        let key = "\(url.path)|\(AnimationTiming.decodeMaxPixel(contentMax: max(w, h), screenMax: screenMaxPixel))" as NSString
+        poolLock.lock(); defer { poolLock.unlock() }
+        if let s = pool.object(forKey: key) { return s }
+        guard let s = FrameSequence(source: src, screenMaxPixel: screenMaxPixel) else { return nil }
+        pool.setObject(s, forKey: key)
+        return s
+    }
+
+    private init?(source src: CGImageSource, screenMaxPixel: Int) {
         let n = CGImageSourceGetCount(src)
         guard n > 0, let p = CGImageSourceCopyPropertiesAtIndex(src, 0, nil) as? [CFString: Any],
               let w = p[kCGImagePropertyPixelWidth] as? Int, let h = p[kCGImagePropertyPixelHeight] as? Int, w > 0, h > 0 else { return nil }
         source = src; count = n
         delays = (0..<n).map { Self.delay(src, $0) }
+        nativeMax = max(w, h)
+        rotated = ((p[kCGImagePropertyOrientation] as? Int) ?? 1) > 1
         let m = AnimationTiming.decodeMaxPixel(contentMax: max(w, h), screenMax: screenMaxPixel)
         maxPixel = m
         let s = min(1, Double(m) / Double(max(w, h)))
         pixelSize = CGSize(width: Double(w) * s, height: Double(h) * s)
         cacheAll = AnimationTiming.canCache(frames: n, width: Int(pixelSize.width), height: Int(pixelSize.height), budgetBytes: Self.cacheBudget)
+    }
+
+    /// Decodes one frame. At native size this is the file's own pixels with no resampling at all; the
+    /// thumbnail path (which can resample) is only used when the frame has to shrink or be rotated.
+    static func decode(_ src: CGImageSource, _ idx: Int, maxPixel: Int, nativeMax: Int, rotated: Bool) -> CGImage? {
+        if maxPixel >= nativeMax && !rotated {
+            return CGImageSourceCreateImageAtIndex(src, idx, [kCGImageSourceShouldCacheImmediately: true] as CFDictionary)
+        }
+        let opts: [CFString: Any] = [kCGImageSourceCreateThumbnailFromImageAlways: true,
+                                     kCGImageSourceCreateThumbnailWithTransform: true,
+                                     kCGImageSourceShouldCacheImmediately: true,
+                                     kCGImageSourceThumbnailMaxPixelSize: maxPixel]
+        return CGImageSourceCreateThumbnailAtIndex(src, idx, opts as CFDictionary)
     }
 
     private static func delay(_ src: CGImageSource, _ i: Int) -> Double {
@@ -47,19 +81,28 @@ final class FrameSequence: @unchecked Sendable {
         return 0.1
     }
 
+    func cached(_ i: Int) -> CGImage? {
+        guard cacheAll else { return nil }
+        let idx = ((i % count) + count) % count
+        return lock.withLock { cache[idx] }
+    }
+
     func frame(_ i: Int) -> CGImage? {
         let idx = ((i % count) + count) % count
         if cacheAll, let c = lock.withLock({ cache[idx] }) { return c }
-        let opts: [CFString: Any] = [kCGImageSourceCreateThumbnailFromImageAlways: true,
-                                     kCGImageSourceCreateThumbnailWithTransform: true,
-                                     kCGImageSourceShouldCacheImmediately: true,
-                                     kCGImageSourceThumbnailMaxPixelSize: maxPixel]
-        let img = CGImageSourceCreateThumbnailAtIndex(source, idx, opts as CFDictionary)
+        let img = Self.decode(source, idx, maxPixel: maxPixel, nativeMax: nativeMax, rotated: rotated)
         if cacheAll, let img { lock.withLock { cache[idx] = img } }
         return img
     }
 
-    func dropCache() { lock.withLock { cache.removeAll() } }
+    /// A surface starts or stops playing this sequence. The cache is only dropped when nobody plays it.
+    func acquire() { lock.withLock { users += 1 } }
+    func release() {
+        lock.withLock {
+            users = max(0, users - 1)
+            if users == 0 { cache.removeAll() }
+        }
+    }
 }
 
 enum EdgeColor {
@@ -86,6 +129,13 @@ enum EdgeColor {
     }
 }
 
+
+/// Display-link target that does not keep the surface alive (a CADisplayLink retains its target).
+private final class LinkTarget: NSObject {
+    weak var surface: WallpaperSurface?
+    @objc func step(_ link: CADisplayLink) { MainActor.assumeIsolated { surface?.step() } }
+}
+
 @MainActor
 final class WallpaperSurface: NSView {
     let info: WallpaperInfo
@@ -100,18 +150,26 @@ final class WallpaperSurface: NSView {
     private var poster: CGImage?
     private var contentPixels: CGSize
 
-    // Animated-image clock.
+    // Animated-image clock, driven by a per-screen display link.
     private var running = false
-    private var generation = 0
+    private var holdsSequence = false
     private var elapsedBefore = 0.0
     private var startedAt = 0.0
     private var shownIndex = -1
+    private var decoding = false
+    private var generation = 0
+    private var link: CADisplayLink?
+    private let linkTarget = LinkTarget()
     private let decodeQueue = DispatchQueue(label: "HapticGlow.wallpaper.decode", qos: .utility)
+    /// The refresh range asked of the panel while an animated image plays (nil for stills and video).
+    private(set) var rateRange: CAFrameRateRange?
 
-    init(info: WallpaperInfo, mediaURL: URL, stillURL: URL, fit: WallpaperFit, fpsCap: Int, screenMaxPixel: Int) {
+    init(info: WallpaperInfo, mediaURL: URL, stillURL: URL, fit: WallpaperFit, fpsCap: Int, screenPixels: CGSize) {
         self.info = info; self.mediaURL = mediaURL; self.fit = fit; self.fpsCap = max(1, fpsCap)
         contentPixels = CGSize(width: info.pixelWidth, height: info.pixelHeight)
+        let screenMaxPixel = Int(max(screenPixels.width, screenPixels.height))
         super.init(frame: .zero)
+        linkTarget.surface = self
         wantsLayer = true
         layer?.masksToBounds = true
         layer?.addSublayer(content)
@@ -122,19 +180,25 @@ final class WallpaperSurface: NSView {
         switch info.kind {
         case .image:
             if let src = CGImageSourceCreateWithURL(mediaURL as CFURL, nil) {
-                let opts: [CFString: Any] = [kCGImageSourceCreateThumbnailFromImageAlways: true, kCGImageSourceCreateThumbnailWithTransform: true,
-                                             kCGImageSourceShouldCacheImmediately: true,
-                                             kCGImageSourceThumbnailMaxPixelSize: AnimationTiming.decodeMaxPixel(contentMax: max(info.pixelWidth, info.pixelHeight), screenMax: screenMaxPixel)]
-                let img = CGImageSourceCreateThumbnailAtIndex(src, 0, opts as CFDictionary) ?? poster
+                let native = max(info.pixelWidth, info.pixelHeight)
+                let rotated = (((CGImageSourceCopyPropertiesAtIndex(src, 0, nil) as? [CFString: Any])?[kCGImagePropertyOrientation] as? Int) ?? 1) > 1
+                let img = FrameSequence.decode(src, 0, maxPixel: AnimationTiming.decodeMaxPixel(contentMax: native, screenMax: screenMaxPixel),
+                                               nativeMax: native, rotated: rotated) ?? poster
                 content.contents = img
                 if let img { contentPixels = CGSize(width: img.width, height: img.height) }
             }
         case .animatedImage:
-            sequence = FrameSequence(url: mediaURL, screenMaxPixel: screenMaxPixel)
-            if let s = sequence { contentPixels = s.pixelSize }
+            sequence = FrameSequence.shared(url: mediaURL, screenMaxPixel: screenMaxPixel)
+            if let s = sequence {
+                contentPixels = s.pixelSize
+                rateRange = AnimationTiming.frameRateRange(delays: s.delays, cap: self.fpsCap)
+            }
             content.contents = poster
         case .video:
             let item = AVPlayerItem(url: mediaURL)
+            // Never decode more than the screen can show; pacing is left to AVPlayerLayer / the panel.
+            item.preferredMaximumResolution = screenPixels
+            item.preferredPeakBitRate = max(8_000_000, screenPixels.width * screenPixels.height * 4)
             let p = AVQueuePlayer()
             p.isMuted = true
             p.volume = 0
@@ -148,34 +212,54 @@ final class WallpaperSurface: NSView {
             layer?.addSublayer(pl)
         }
         content.contentsGravity = .resize
+        content.allowsEdgeAntialiasing = false
+        content.edgeAntialiasingMask = []
         content.isHidden = info.kind == .video
         apply(fit: fit)
     }
 
     required init?(coder: NSCoder) { fatalError() }
 
-    isolated deinit { stop() }
+    isolated deinit { shutdown() }
 
-    private var backing: CGFloat { window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2 }
+    private var backing: CGFloat { window?.backingScaleFactor ?? window?.screen?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2 }
 
     func apply(fit: WallpaperFit) {
         self.fit = fit
-        let nearest = fit == .pixelArt
-        content.magnificationFilter = nearest ? .nearest : .linear
-        content.minificationFilter = nearest ? .nearest : .linear
-        playerLayer?.magnificationFilter = nearest ? .nearest : .linear
+        // Pixel art: nearest neighbour everywhere, so a 960x540 frame on a 3840x2160 panel is exactly 4x.
+        let f: CALayerContentsFilter = fit == .pixelArt ? .nearest : .linear
+        content.magnificationFilter = f
+        content.minificationFilter = f
+        playerLayer?.magnificationFilter = f
+        playerLayer?.minificationFilter = f
         needsLayout = true
     }
 
     override func layout() {
         super.layout()
-        let rect = WallpaperLayout.rect(fit: fit, content: contentPixels, bounds: bounds.size, backing: backing)
+        let b = backing
+        let rect = WallpaperLayout.rect(fit: fit, content: contentPixels, bounds: bounds.size, backing: b)
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        content.contentsScale = backing
+        layer?.contentsScale = b
+        content.contentsScale = b
+        playerLayer?.contentsScale = b
         content.frame = rect
         playerLayer?.frame = rect
         CATransaction.commit()
+    }
+
+    /// The window moved to a screen with another scale (or the mode changed): re-layout and re-attach the display link.
+    override func viewDidChangeBackingProperties() {
+        super.viewDidChangeBackingProperties()
+        needsLayout = true
+        rebuildLink()
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        needsLayout = true
+        rebuildLink()
     }
 
     // MARK: Playback
@@ -194,43 +278,70 @@ final class WallpaperSurface: NSView {
         }
     }
 
-    private func stop() {
-        generation += 1
+    /// Releases the display link, decoder and player. Called when the surface is replaced or the engine stops.
+    func shutdown() {
+        stopClock()
+        link?.invalidate(); link = nil
         player?.pause()
         looper?.disableLooping()
     }
 
     private func now() -> Double { ProcessInfo.processInfo.systemUptime }
 
+    private func makeLink() {
+        guard link == nil, window != nil, rateRange != nil else { return }
+        let l = displayLink(target: linkTarget, selector: #selector(LinkTarget.step(_:)))
+        if let r = rateRange { l.preferredFrameRateRange = r }
+        l.isPaused = !running
+        l.add(to: .main, forMode: .common)
+        link = l
+    }
+
+    private func rebuildLink() {
+        link?.invalidate(); link = nil
+        if running { makeLink() }
+    }
+
     private func startClock() {
         guard !running, let seq = sequence, seq.count > 1 else { return }
         running = true
         startedAt = now()
         generation += 1
-        tick(generation)
+        if !holdsSequence { seq.acquire(); holdsSequence = true }
+        if link == nil { makeLink() }
+        link?.isPaused = false
     }
 
     private func stopClock() {
+        link?.isPaused = true
         guard running else { return }
         running = false
         elapsedBefore += now() - startedAt
         generation += 1
-        sequence?.dropCache()
+        decoding = false
+        if holdsSequence { sequence?.release(); holdsSequence = false }
     }
 
-    private func tick(_ gen: Int) {
-        guard running, gen == generation, let seq = sequence else { return }
+    /// One display-link tick: show the frame that belongs at this time. Frames only change at the content's own
+    /// rate, and the link's preferred range lets ProMotion run the panel slower than its maximum.
+    fileprivate func step() {
+        guard running, let seq = sequence else { return }
         let t = elapsedBefore + (now() - startedAt)
         let idx = AnimationTiming.frameIndex(at: t, delays: seq.delays)
-        let wait = max(AnimationTiming.timeToNextFrame(at: t, delays: seq.delays), 1.0 / Double(fpsCap))
-        if idx != shownIndex {
-            decodeQueue.async { [weak self] in
-                let img = seq.frame(idx)
-                DispatchQueue.main.async { MainActor.assumeIsolated { if let self, gen == self.generation { self.show(img, index: idx) } } }
+        guard idx != shownIndex else { return }
+        if let img = seq.cached(idx) { show(img, index: idx); return }
+        guard !decoding else { return }
+        decoding = true
+        let gen = generation
+        decodeQueue.async { [weak self] in
+            let img = seq.frame(idx)
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    guard let self, gen == self.generation else { return }
+                    self.decoding = false
+                    self.show(img, index: idx)
+                }
             }
-        }
-        DispatchQueue.main.asyncAfter(deadline: .now() + wait, qos: .utility) { [weak self] in
-            MainActor.assumeIsolated { self?.tick(gen) }
         }
     }
 

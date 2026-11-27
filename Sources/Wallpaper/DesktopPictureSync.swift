@@ -93,6 +93,7 @@ enum DesktopPictureSync {
         let o: [NSWorkspace.DesktopImageOptionKey: Any] = [.imageScaling: NSNumber(value: NSImageScaling.scaleProportionallyUpOrDown.rawValue),
                                                            .allowClipping: NSNumber(value: true)]
         try NSWorkspace.shared.setDesktopImageURL(url, for: screen, options: o)
+        Log.write("[wallpaper] desktop picture set: \(screen.localizedName) <- \(url.lastPathComponent)")
     }
 
     /// Puts every backed-up screen's original picture back, then forgets the backup. Screens that are not
@@ -105,8 +106,12 @@ enum DesktopPictureSync {
             guard let key = DisplayKey.of(screen), let e = b[key] else { continue }
             let url = URL(fileURLWithPath: e.path)
             if FileManager.default.fileExists(atPath: e.path) {
-                do { try NSWorkspace.shared.setDesktopImageURL(url, for: screen, options: options(from: e)); restored += 1 }
-                catch { Log.write("[wallpaper] restore failed: \(error.localizedDescription)"); continue }
+                do {
+                    try NSWorkspace.shared.setDesktopImageURL(url, for: screen, options: options(from: e)); restored += 1
+                    Log.write("[wallpaper] desktop picture restored: \(screen.localizedName) <- \(url.lastPathComponent)")
+                } catch { Log.write("[wallpaper] restore failed for \(screen.localizedName): \(error.localizedDescription)"); continue }
+            } else {
+                Log.write("[wallpaper] original picture of \(screen.localizedName) is gone, dropping its backup")
             }
             b[key] = nil
         }
@@ -127,7 +132,9 @@ enum StillComposer {
         ctx.fill(CGRect(x: 0, y: 0, width: w, height: h))
         let pts = CGSize(width: pixelSize.width / backing, height: pixelSize.height / backing)
         let r = WallpaperLayout.rect(fit: fit, content: CGSize(width: still.width, height: still.height), bounds: pts, backing: backing)
-        let dst = CGRect(x: r.minX * backing, y: r.minY * backing, width: r.width * backing, height: r.height * backing)
+        // Whole device pixels, and no interpolation at all for pixel art: a 960x540 frame on a 3840x2160 still is exactly 4x.
+        let dst = CGRect(x: (r.minX * backing).rounded(), y: (r.minY * backing).rounded(),
+                         width: (r.width * backing).rounded(), height: (r.height * backing).rounded())
         ctx.interpolationQuality = fit == .pixelArt ? .none : .high
         ctx.draw(still, in: dst)
         return ctx.makeImage()
