@@ -4,6 +4,7 @@
 // Pure wallpaper maths: fit modes, integer scaling, animation timing, pause gating, desktop-picture classification.
 import Foundation
 import CoreGraphics
+import QuartzCore
 
 enum WallpaperFit: String, Codable, CaseIterable, Sendable, Identifiable {
     case fill, fit, stretch, center, pixelArt
@@ -96,6 +97,18 @@ enum AnimationTiming {
         var acc = 0.0
         for d in delays { acc += d; if rem < acc { return max(acc - rem, 0.001) } }
         return max(total - rem, 0.001)
+    }
+
+    /// Panel refresh range to ask a display link for while an animation plays. The preferred rate is the content's
+    /// fastest frame rate (so no frame is late), capped by the user's limit; ProMotion may then run the panel
+    /// anywhere inside min...max instead of its full 120 Hz. A 12 fps GIF asks for 8 / 12 / 15.
+    static func frameRateRange(delays: [Double], cap: Int) -> CAFrameRateRange {
+        let shortest = delays.filter { $0 > 0 }.min() ?? 0.1
+        let capF = Double(max(1, cap))
+        let preferred = max(1, min(1 / shortest, capF).rounded())
+        let upper = max(preferred, min((preferred * 1.25).rounded(.up), capF))
+        let lower = max(1, (preferred * 2 / 3).rounded(.down))
+        return CAFrameRateRange(minimum: Float(lower), maximum: Float(upper), preferred: Float(preferred))
     }
 
     /// Whether every decoded frame fits the memory budget, so the loop can be cached instead of re-decoded.
