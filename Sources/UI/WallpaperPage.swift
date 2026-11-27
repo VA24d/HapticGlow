@@ -10,6 +10,8 @@ struct WallpaperPage: View {
     @Bindable var model = AppModel.shared
     @State private var library = WallpaperLibrary.shared
     @State private var engine = WallpaperEngine.shared
+    @State private var lockBusy = false
+    @State private var lockMessage: String?
     @State private var selected: String?
     @State private var linkText = ""
     @State private var importing = false
@@ -186,10 +188,40 @@ struct WallpaperPage: View {
                 Text("Pixel art scales by whole numbers with sharp edges and fills the borders with the image's edge colour.")
                     .font(Theme.Font.caption).foregroundStyle(Theme.textTertiary)
             }
+            lockScreenRow(item)
             if item.kind != .image && model.wallpaper.enabled && model.wallpaper.itemID == item.id {
                 Button("Use Current Frame for the Lock Screen") { Task { await engine.useCurrentFrameAsStill() } }
                     .controlSize(.small).disabled(!model.wallpaper.syncLockScreen)
             }
+        }
+    }
+
+    private func lockScreenRow(_ item: WallpaperInfo) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Animated lock screen").font(Theme.Font.label).foregroundStyle(Theme.textPrimary)
+                    Text("Exports a video loop and adds it to macOS's Aerial list. Asks for your password once.")
+                        .font(Theme.Font.caption).foregroundStyle(Theme.textTertiary)
+                }
+                Spacer()
+                if lockBusy { ProgressView().controlSize(.small) }
+                Button("Use on Lock Screen") { runLock { try await LockScreenInstaller.install(item: item, mediaURL: library.mediaURL(item),
+                        fit: model.wallpaper.fitOverrides[item.id] ?? item.defaultFit, screen: NSScreen.main) } }
+                    .controlSize(.small).disabled(lockBusy)
+                if LockScreenInstaller.hasAnyInstalled() {
+                    Button("Remove from Lock Screen") { runLock { try await LockScreenInstaller.removeAll() } }.controlSize(.small).disabled(lockBusy)
+                }
+            }
+            if let m = lockMessage { Text(m).font(Theme.Font.caption).foregroundStyle(Theme.textSecondary).fixedSize(horizontal: false, vertical: true) }
+        }
+    }
+
+    private func runLock(_ work: @escaping @MainActor () async throws -> String) {
+        lockBusy = true; lockMessage = nil
+        Task {
+            do { lockMessage = try await work() } catch { lockMessage = error.localizedDescription }
+            lockBusy = false
         }
     }
 

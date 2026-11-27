@@ -60,6 +60,7 @@ cp Resources/Info.plist "$APP/Contents/Info.plist"
 printf 'APPL????' > "$APP/Contents/PkgInfo"
 [ -f Resources/AppIcon.icns ] && cp Resources/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
 rsync -a --delete --exclude '.DS_Store' Sounds/ "$APP/Contents/Resources/Sounds/"
+cp Resources/lockscreen-install.sh "$APP/Contents/Resources/lockscreen-install.sh"
 cp LICENSE.md "$APP/Contents/Resources/LICENSE.md"
 cp NOTICE.md "$APP/Contents/Resources/NOTICE.md"
 

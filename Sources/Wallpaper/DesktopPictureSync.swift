@@ -128,6 +128,13 @@ enum StillComposer {
         let cs = CGColorSpace(name: CGColorSpace.sRGB) ?? CGColorSpaceCreateDeviceRGB()
         guard let ctx = CGContext(data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: 0, space: cs,
                                   bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
+        draw(still, into: ctx, fit: fit, pixelSize: pixelSize, backing: backing, edge: edge)
+        return ctx.makeImage()
+    }
+
+    /// Fills `ctx` (w x h device pixels) with the edge colour and draws the image with the live wallpaper's fit.
+    static func draw(_ still: CGImage, into ctx: CGContext, fit: WallpaperFit, pixelSize: CGSize, backing: CGFloat, edge: CGColor) {
+        let w = Int(pixelSize.width), h = Int(pixelSize.height)
         ctx.setFillColor(edge)
         ctx.fill(CGRect(x: 0, y: 0, width: w, height: h))
         let pts = CGSize(width: pixelSize.width / backing, height: pixelSize.height / backing)
@@ -137,6 +144,5 @@ enum StillComposer {
                          width: (r.width * backing).rounded(), height: (r.height * backing).rounded())
         ctx.interpolationQuality = fit == .pixelArt ? .none : .high
         ctx.draw(still, in: dst)
-        return ctx.makeImage()
     }
 }
