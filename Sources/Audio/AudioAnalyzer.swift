@@ -8,7 +8,8 @@
 // OnsetDetector (MIT, XiaoSong1223). Everything else is original.
 //
 // Pipeline (hop = 256 samples, FFT 2048 Hann recomputed every hop, all buffers preallocated):
-//   per-sample : onset LP + envelope, below-cutoff envelope (2x biquad), hop RMS
+//   per-sample : onset LP + envelope, 80-320 Hz band leg (re-attacks of a held, compressed 808 that the
+//                150 Hz envelope barely sees), below-cutoff envelope (2x biquad), hop RMS
 //   per-hop FFT: 5 bands, 32 log bands, low-band spectral flux (secondary onset path, never fires
 //                on held notes because it looks at total 40-150 Hz energy, not per-bin changes),
 //                bass pitch (magnitude peak + phase-vocoder refinement), two mid peaks
@@ -101,6 +102,14 @@ final class AnalyzerCore {
     private var oEnv: Float = 0, oAvg: Float = 0, oPeak: Float = 0
     private var oAttack: Float = 0, oRelease: Float = 0, oAvgC: Float = 0, oPeakC: Float = 0
     private var oArmed = true
+    // band leg (80-320 Hz): re-attacks of a held, compressed 808 barely move the 150 Hz envelope, but
+    // their click and harmonics stand out against a short average of this band
+    private var pb0 = 0.0, pba1 = 0.0, pba2 = 0.0
+    private var px1 = 0.0, px2 = 0.0, py1 = 0.0, py2 = 0.0
+    private var pEnv: Float = 0, pAvg: Float = 0
+    private var pAtt: Float = 0, pRel: Float = 0, pAvgC: Float = 0
+    private var pArmed = true
+    private let pHist = UnsafeMutablePointer<Float>.allocate(capacity: 16)   // band env per hop
     private var oPkSince: Float = 0     // envelope peak since the last onset (re-arm on a clear decay even above a held sub note)
     private var sinceOnset = Int.max / 2
     private var refractory = 5280
@@ -257,6 +266,8 @@ final class AnalyzerCore {
         cRefDecay = expf(-hopT / 8.0)
         refractory = Int(0.110 * s)
         setOnsetFilter(150)
+        setBandFilter(170)
+        pAtt = c(0.002); pRel = c(0.050); pAvgC = c(0.25)
         let tb = Float(s) / Float(AnalyzerCore.tN)
         sLo = max(1, Int((150 / tb).rounded(.up))); sHi = max(sLo + 3, Int((2000 / tb).rounded(.down)))
         hLo = Int((5000 / tb).rounded(.up)); hHi = min(255, Int((min(16000, Float(s) * 0.48) / tb).rounded(.down)))
@@ -268,6 +279,12 @@ final class AnalyzerCore {
         let cw = cos(w0), al = sin(w0) / (2 * 0.70710678), a0 = 1 + al
         ob0 = (1 - cw) / 2 / a0; ob1 = (1 - cw) / a0; ob2 = ob0
         oa1 = -2 * cw / a0; oa2 = (1 - al) / a0
+    }
+
+    private func setBandFilter(_ fc: Double) {
+        let w0 = 2 * Double.pi * min(fc, sr / 2 - 1) / sr
+        let cw = cos(w0), al = sin(w0) / (2 * 0.8), a0 = 1 + al
+        pb0 = al / a0; pba1 = -2 * cw / a0; pba2 = (1 - al) / a0
     }
 
     private func setCutoff(_ fc: Float) {
@@ -290,6 +307,7 @@ final class AnalyzerCore {
         silentSamples = 0; isSilent = true
         ox1 = 0; ox2 = 0; oy1 = 0; oy2 = 0
         oEnv = 0; oAvg = 0; oPeak = 0; oArmed = true; oPkSince = 0; sinceOnset = Int.max / 2
+        px1 = 0; px2 = 0; py1 = 0; py2 = 0; pEnv = 0; pAvg = 0; pArmed = true; pHist.update(repeating: 0, count: 16)
         envHist.update(repeating: 0, count: 16); envHistPos = 0
         prevLowE = 1e-9; fluxPos = 0; fluxCount = 0; fluxPrev = 0; fluxArmed = true
         fluxHist.update(repeating: 0, count: 96)
@@ -382,6 +400,10 @@ final class AnalyzerCore {
         // rise reference: min envelope over the last ~30 ms (6 hops back)
         var envBefore: Float = .greatestFiniteMagnitude
         for k in 0..<6 { envBefore = min(envBefore, envHist[(envHistPos + 16 - 1 - k) & 15]) }
+        var pBefore: Float = .greatestFiniteMagnitude
+        for k in 0..<6 { pBefore = min(pBefore, pHist[(envHistPos + 16 - 1 - k) & 15]) }
+        var pe = pEnv, pa = pAvg, px1l = px1, px2l = px2, py1l = py1, py2l = py2
+        var pArm = pArmed
         for i in lo..<hi {
             let s = Double(hopBuf[i])
             let y = ob0 * s + ob1 * x1 + ob2 * x2 - oa1 * y1 - oa2 * y2
@@ -411,6 +433,20 @@ final class AnalyzerCore {
                     onsetBack = back
                 }
             }
+            // band leg
+            let yb = pb0 * (s - px2l) - pba1 * py1l - pba2 * py2l
+            px2l = px1l; px1l = s; py2l = py1l; py1l = yb
+            let pm = Float(abs(yb))
+            pe = pm + (pe - pm) * (pm > pe ? pAtt : pRel)
+            pa = pe + (pa - pe) * pAvgC
+            if !pArm && pe < 1.1 * pa { pArm = true }
+            if pArm && onsetIdx < 0 && pe > 3e-4 && pe > 1.3 * pa && pe > 1.3 * pBefore && since >= refractory
+                && env > 0.3 * pk {
+                since = 0; armed = false; pArm = false; pkSince = env
+                onsetIdx = i
+                onsetStr = max(0.3, pk > 0 ? min(1, env / pk) : 0)
+                onsetBack = min(Int(0.004 * sr), Int(hopStart) + i)
+            }
             // below cutoff: two cascaded biquads
             let u = Double(hopBuf[i])
             let v1 = cb0 * u + cb1 * s0x1 + cb2 * s0x2 - ca1 * s0y1 - ca2 * s0y2
@@ -421,6 +457,7 @@ final class AnalyzerCore {
             ce = m2 + (ce - m2) * (m2 > ce ? cAtt : cRel)
         }
         oEnv = env; oAvg = avg; oPeak = pk
+        pEnv = pe; pAvg = pa; px1 = px1l; px2 = px2l; py1 = py1l; py2 = py2l; pArmed = pArm
         ox1 = x1; ox2 = x2; oy1 = y1; oy2 = y2
         cEnv = ce
         cs[0] = s0x1; cs[1] = s0x2; cs[2] = s0y1; cs[3] = s0y2
@@ -451,7 +488,7 @@ final class AnalyzerCore {
         // ---- per-sample stage ----
         scan(hopHalfDone ? hopHalf : 0, h, hopStart: hopStart)
         hopHalfDone = false
-        envHist[envHistPos & 15] = oEnv; envHistPos = (envHistPos + 1) & 15
+        envHist[envHistPos & 15] = oEnv; pHist[envHistPos & 15] = pEnv; envHistPos = (envHistPos + 1) & 15
         let onsetIdx = hopOnsetIdx, onsetBack = hopOnsetBack, onsetStr = hopOnsetStr
 
         // ---- silence gate ----

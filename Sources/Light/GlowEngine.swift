@@ -201,6 +201,7 @@ final class LogiCapture: GlowOutput {
 private struct OnsetQueue {
     var items: [GlowOnset] = { var a = [GlowOnset](); a.reserveCapacity(64); return a }()
     var lastCount: UInt64 = .max
+    var seen: UInt64 = 0          // onsets received from the analyzer (diagnostics)
 }
 
 private let musicModes: Set<GlowMode> = [.beatPulse, .bassFollow, .beatStrobe, .metronome, .spectrum]
@@ -253,6 +254,8 @@ final class GlowEngine: @unchecked Sendable {
     private var keyToken: Int?
     private var featToken: Int?
     private let onsetQ = Locked(OnsetQueue())
+    /// Onsets the glow has received from the analyzer since launch (diagnostic log).
+    var onsetsSeen: UInt64 { onsetQ.get().seen }
     private var r = Renderer()                 // touched only on `queue`
     /// Second renderer for a Logitech keyboard: same modes, drawn `LogitechBacklight.leadSeconds` earlier
     /// so the Bluetooth write lands with the music. Touched only on `queue`.
@@ -307,6 +310,7 @@ final class GlowEngine: @unchecked Sendable {
             onsetQ.update { q in
                 guard f.onsetCount != q.lastCount else { return }
                 q.lastCount = f.onsetCount
+                q.seen &+= 1
                 // lastOnsetTime is an estimate that precedes the detecting frame; keep it sane.
                 let t = f.lastOnsetTime > 0 ? min(max(f.lastOnsetTime, f.time - 0.06), f.time) : f.time
                 if q.items.count < 64 { q.items.append(GlowOnset(time: t, strength: f.onsetStrength > 0 ? f.onsetStrength : 1)) }

@@ -17,7 +17,7 @@ import Observation
 // MARK: - Route model
 
 enum OutputKind: String, Sendable {
-    case builtInSpeakers, wiredHeadphones, bluetooth, airPlay, other, none
+    case builtInSpeakers, wiredHeadphones, bluetooth, airPlay, display, other, none
 
     var isHeadphoneLike: Bool { self == .wiredHeadphones || self == .bluetooth }
 }
@@ -173,6 +173,11 @@ final class OutputRoute: @unchecked Sendable {
             return .bluetooth
         case kAudioDeviceTransportTypeAirPlay:
             return .airPlay
+        case kAudioDeviceTransportTypeDisplayPort, kAudioDeviceTransportTypeHDMI:
+            return .display
+        case kAudioDeviceTransportTypeThunderbolt:
+            // Thunderbolt carries docks and audio interfaces too: only a device named like a display counts.
+            return isDisplayName(name) ? .display : .other
         case kAudioDeviceTransportTypeUSB:
             // USB DACs and headsets are overwhelmingly headphones in practice; treat as wired headphones.
             let n = name.lowercased()
@@ -180,6 +185,17 @@ final class OutputRoute: @unchecked Sendable {
         default:
             return .other
         }
+    }
+
+    private static func isDisplayName(_ name: String) -> Bool {
+        let n = name.lowercased()
+        return n.contains("display") || n.contains("monitor") || n.contains("hdmi")
+    }
+
+    /// True for audio that travels inside a video signal (DisplayPort, HDMI, Thunderbolt display): monitors and
+    /// TVs often buffer it to match their video processing, so the latency macOS reports is usually too low.
+    static func isDisplayAudio(transport: UInt32, name: String) -> Bool {
+        classify(transport: transport, dataSource: 0, name: name) == .display
     }
 
     private static func fourCC(_ s: String) -> UInt32 { s.utf8.reduce(0) { ($0 << 8) | UInt32($1) } }

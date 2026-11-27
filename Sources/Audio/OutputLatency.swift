@@ -14,6 +14,8 @@ import CoreAudio
 struct OutputLatencyInfo: Sendable, Equatable {
     var deviceID: AudioObjectID = 0
     var name: String = ""
+    /// Stable device identifier (kAudioDevicePropertyDeviceUID); keys the per-device sync fine-tune.
+    var uid: String = ""
     var seconds: Double = 0
     var sampleRate: Double = 0
     var deviceFrames: UInt32 = 0
@@ -21,6 +23,8 @@ struct OutputLatencyInfo: Sendable, Equatable {
     var bufferFrames: UInt32 = 0
     var streamFrames: UInt32 = 0
     var transport: UInt32 = 0
+    /// DisplayPort / HDMI / Thunderbolt display audio: the monitor usually delays it beyond what macOS reports.
+    var isDisplay: Bool { OutputRoute.isDisplayAudio(transport: transport, name: name) }
     var isBluetooth: Bool {
         transport == kAudioDeviceTransportTypeBluetooth || transport == kAudioDeviceTransportTypeBluetoothLE
     }
@@ -114,6 +118,9 @@ final class OutputLatency: @unchecked Sendable {
         var nA = addr(kAudioObjectPropertyName); var cf: Unmanaged<CFString>?
         sz = UInt32(MemoryLayout<Unmanaged<CFString>?>.size)
         if AudioObjectGetPropertyData(dev, &nA, 0, nil, &sz, &cf) == noErr, let c = cf { i.name = c.takeRetainedValue() as String }
+        var uA = addr(kAudioDevicePropertyDeviceUID); var ucf: Unmanaged<CFString>?
+        sz = UInt32(MemoryLayout<Unmanaged<CFString>?>.size)
+        if AudioObjectGetPropertyData(dev, &uA, 0, nil, &sz, &ucf) == noErr, let c = ucf { i.uid = c.takeRetainedValue() as String }
         let frames = Double(i.deviceFrames) + Double(i.safetyFrames) + Double(i.bufferFrames) + Double(i.streamFrames)
         i.seconds = frames / rate
         return i
@@ -152,12 +159,14 @@ final class OutputLatency: @unchecked Sendable {
         guard changed else { return }
         Log.write(String(format: "[sync] output '%@' latency %.1f ms (dev %u + safety %u + buf %u + stream %u frames @ %.0f Hz)%@",
                          i.name, i.seconds * 1000, i.deviceFrames, i.safetyFrames, i.bufferFrames, i.streamFrames,
-                         i.sampleRate, i.isBluetooth ? " bluetooth" : ""))
-        let name = i.name, ms = i.seconds * 1000
+                         i.sampleRate, i.isBluetooth ? " bluetooth" : (i.isDisplay ? " display (monitor audio is often buffered; real delay may be larger, use Tap along)" : "")))
+        let name = i.name, ms = i.seconds * 1000, uid = i.uid, display = i.isDisplay
         DispatchQueue.main.async {
             MainActor.assumeIsolated {
                 AppModel.shared.outputDeviceName = name
                 AppModel.shared.outputLatencyMs = ms
+                AppModel.shared.outputIsDisplay = display
+                AppModel.shared.outputDeviceUID = uid
             }
         }
     }

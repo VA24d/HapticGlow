@@ -218,7 +218,7 @@ enum MusicStyle {
     static let textureAmpMax: Float = 34, melodyAmpMax: Float = 14
     /// Spacing between distinct taps (ghost effect) and the sync step between a kick pulse and its body.
     static let tapSpacing = 0.070
-    static let rollMax = 6, rollStrong: Float = 0.85
+    static let rollMax = 8, rollStrong: Float = 0.85
     static let bodyDelay = 0.0045
     /// Texture self-budget: the planner stops texture when all of its actuations in the last second
     /// would exceed this (the motor's own limit is 60 %, so taps keep headroom).
@@ -294,6 +294,12 @@ final class MusicPlanner {
     /// Nominal actuating milliseconds per layer (same order as `counts`).
     private(set) var layerMS = [Double](repeating: 0, count: 6)
     private(set) var masked: UInt64 = 0, dropped: UInt64 = 0, retriggerBlocked: UInt64 = 0, rateBlocked: UInt64 = 0
+    /// Cumulative counters for the 30 s diagnostic line: kicks, snares, hats, masked, dropped, retriggerBlocked,
+    /// rateBlocked, and the glow's onset count passed through.
+    func diagCounters(glowOnsets: UInt64) -> [UInt64] {
+        [counts[MusicLayer.kick.rawValue] &+ counts[MusicLayer.kickWave.rawValue], counts[MusicLayer.snare.rawValue],
+         counts[MusicLayer.hat.rawValue], masked, dropped, retriggerBlocked, rateBlocked, glowOnsets]
+    }
     private(set) var lastLayer: MusicLayer = .texture
     private(set) var lastLevel: Float = 0
     var impulseOK = true            // legacy, kept for the engine
