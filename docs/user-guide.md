@@ -12,6 +12,14 @@ Banners appear here when something needs attention: paused, no audio capture, wa
 
 <p align="center"><img src="images/dashboard.png" width="720" alt="Dashboard"></p>
 
+## Now playing
+
+While Apple Music or Spotify plays a song, its title and artist appear on the Dashboard and in the menu bar panel. They disappear when the music pauses or stops. HapticGlow reads this from the notifications those apps already send, so it needs no permission. If one of them is already open when HapticGlow starts, macOS may ask once whether HapticGlow can ask it what is playing. Saying no is fine: the song shows up as soon as the next track starts.
+
+**Genre presets.** If the song's genre is known, HapticGlow adjusts the haptics and glow to suit it. Hip-hop, rap, trap and electronic get a stronger kick and fewer small taps. Rock and metal get more snare and hi-hat detail. Soundtrack, classical and ambient get smoother, longer swells. A podcast or audiobook switches Auto to the Movie feel. Any other genre leaves your settings alone. Spotify does not report a genre, so only Apple Music songs get a preset. Turn presets off in Settings under Now playing.
+
+**Remember for this song.** Change the haptic or glow settings while a song plays and a *Remember for this song* button appears. Press it and those changes are applied each time the song comes back. When the song ends or changes, your usual settings return. Saved songs win over genre presets. A setting you change without pressing the button simply stays changed, as it always did. *Forget* removes a song's saved tuning, and *Forget All* in Settings clears them all. Sync is not part of this, because it belongs to your output device.
+
 ## Keyboard Glow
 
 Choose a mode from the grid. The modes come in three groups.
@@ -91,13 +99,14 @@ Shows the three permissions with their current state, a button to request each o
 - **Launch at login** and **Show in menu bar**.
 - **Appearance.** Follow the system, or force light or dark.
 - **Onset sensitivity.** How readily the analyzer calls a kick.
+- **Now playing.** Turn genre presets on or off, and forget saved songs.
 - **Sync.** *Auto (device latency)* uses the delay your output device reports. *Fine-tune* shifts the glow and haptics by up to 300 ms earlier or later. If the light flashes before you hear the beat, move it later.
 - **Restore keyboard backlight.** Puts brightness and auto-brightness back as macOS had them.
 - **Log file** location, and **Welcome tour** replay.
 
 ## Menu bar
 
-The menu bar panel has a Running switch, a status line with the current glow mode, an Auto switch with pickers for the music mode and the idle mode, a brightness slider, buttons for Glow, Haptics and Sounds, Open HapticGlow and Quit.
+The menu bar panel has a Running switch, a status line with the current glow mode, the song that is playing, an Auto switch with pickers for the music mode and the idle mode, a brightness slider, buttons for Glow, Haptics and Sounds, Open HapticGlow and Quit.
 
 <p align="center"><img src="images/menubar.png" width="320" alt="Menu bar panel"></p>
 

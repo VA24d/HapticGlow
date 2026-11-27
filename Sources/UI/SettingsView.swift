@@ -26,6 +26,7 @@ enum AppearanceChoice: String, CaseIterable, Identifiable {
 
 struct SettingsView: View {
     @State private var model = AppModel.shared
+    @State private var nowPlaying = NowPlaying.shared
     @AppStorage(AppearanceChoice.key) private var appearance = AppearanceChoice.system.rawValue
     @State private var loginStatus = SMAppService.mainApp.status
     @State private var loginError: String?
@@ -66,6 +67,22 @@ struct SettingsView: View {
                     SliderRow(title: "Onset sensitivity", value: $model.onsetSensitivity, range: 0.25...3,
                               format: { String(format: "×%.2f", $0) },
                               help: "Higher catches softer kicks; lower ignores everything but the hardest hits.")
+                }
+
+                group("Now playing") {
+                    ToggleRow(title: "Genre presets",
+                              subtitle: "Shape the haptics and glow to the genre of the song in Apple Music, such as a stronger kick for hip-hop. Songs you saved always win.",
+                              isOn: $nowPlaying.genrePresets)
+                    HStack {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Saved songs").font(Theme.Font.label)
+                            Text(nowPlaying.savedSongCount == 0 ? "None yet. Use Remember for this song while one plays."
+                                 : "\(nowPlaying.savedSongCount) saved on this Mac.")
+                                .font(Theme.Font.caption).foregroundStyle(Theme.textTertiary)
+                        }
+                        Spacer()
+                        Button("Forget All") { nowPlaying.forgetAll() }.disabled(nowPlaying.savedSongCount == 0)
+                    }
                 }
 
                 group("Sync") {

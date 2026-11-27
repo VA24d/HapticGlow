@@ -7,11 +7,14 @@ HapticGlow runs entirely on your Mac.
 - **Audio is never recorded or sent.** The system audio tap reads buffers in memory to compute levels, beats and onsets, then discards them. No audio is written to disk.
 - **Keystrokes are not stored.** Key events are used to trigger a sound and a light pulse. The app keeps no record of what you type. Input Monitoring is needed for this and nothing else.
 
+- **Song details stay on your Mac.** When Apple Music or Spotify plays, HapticGlow reads the song name, artist, album and genre that the player announces to other apps on your Mac. They are shown in the app and used to pick tuning. They are never sent anywhere, and the only song details written to disk are the title and artist of songs you choose to save tuning for. HapticGlow never controls playback.
+
 ## What is stored
 
 On your Mac only:
 
 - **Preferences** in UserDefaults (domain `com.hapticglow.mac`, file in `~/Library/Preferences`): effect, haptic and sound settings, audio source, menu bar visibility, onboarding state, the last backlight brightness known to be good, and typing practice options (word count, time limit).
+- **Saved song tuning** in UserDefaults (key `songTunings.v1`): for up to 500 songs you chose to remember, the song's title and artist, an identifier from the player, and the haptic and glow settings you saved. The oldest unused songs are dropped first. *Forget All* in Settings clears it.
 - **Typing practice history** in UserDefaults (key `practice.v1`): up to 200 past sessions with results, personal bests, and per-key timing and miss counts. This covers only the practice words HapticGlow showed you. It is not recorded from normal typing.
 - **Logitech MX Keys backlight settings** in UserDefaults (keys starting `logiOriginal.`, `logiMaxDuration.` and `logiLastSerial.`): your saved backlight configuration, so it can be restored. The keys include the keyboard's product name and, when it reports one, its serial number.
 - **A backlight snapshot** at `~/Library/Application Support/HapticGlow/backlight-snapshot.json`: the keyboard backlight state from before HapticGlow changed it, used to restore it after a crash or force quit.

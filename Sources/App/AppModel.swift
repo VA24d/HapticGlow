@@ -60,8 +60,8 @@ final class AppModel {
     static let shared = AppModel()
 
     // MARK: Persisted settings (each change is pushed to its engine immediately)
-    var glow: GlowConfig { didSet { if glow != oldValue { GlowEngine.shared.update(glow); save() } } }
-    var haptic: HapticConfig { didSet { if haptic != oldValue { pushHaptic(); save(); syncHapticRunState() } } }
+    var glow: GlowConfig { didSet { if glow != oldValue { NowPlaying.shared.glowEdited(from: oldValue); GlowEngine.shared.update(glow); save() } } }
+    var haptic: HapticConfig { didSet { if haptic != oldValue { NowPlaying.shared.hapticEdited(from: oldValue); pushHaptic(); save(); syncHapticRunState() } } }
     var sound: SoundConfig { didSet { if sound != oldValue { KeySoundEngine.shared.update(sound); save() } } }
     var onsetSensitivity: Float { didSet { FeatureBus.shared.sensitivity = onsetSensitivity; save() } }
     /// Audio-to-ear sync. Pushed to SyncClock; OutputLatency supplies the measured device latency.
@@ -153,8 +153,10 @@ final class AppModel {
 
     private func save() {
         let enc = JSONEncoder()
-        if let d = try? enc.encode(glow) { defaults.set(d, forKey: "glow.v2") }
-        if let d = try? enc.encode(haptic) { defaults.set(d, forKey: "haptic.v2") }
+        // While a song's tuning is layered on, the user's normal settings are what gets saved.
+        let (savedHaptic, savedGlow) = NowPlaying.shared.persisted(haptic: haptic, glow: glow)
+        if let d = try? enc.encode(savedGlow) { defaults.set(d, forKey: "glow.v2") }
+        if let d = try? enc.encode(savedHaptic) { defaults.set(d, forKey: "haptic.v2") }
         if let d = try? enc.encode(sound) { defaults.set(d, forKey: "sound.v2") }
         if let d = try? enc.encode(sync) { defaults.set(d, forKey: "sync.v1") }
         defaults.set(onsetSensitivity, forKey: "onsetSensitivity")
@@ -227,6 +229,7 @@ final class AppModel {
         GlowEngine.shared.update(glow)
         HapticEngine.shared.update(haptic)
         startMenuBarPolling()
+        if !SnapshotMode.active { NowPlaying.shared.start() }
         KeySoundEngine.shared.update(sound)
         refreshPermissions()
 
