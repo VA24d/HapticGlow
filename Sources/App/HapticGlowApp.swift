@@ -98,6 +98,7 @@ enum QuitSignals {
                 guard !ran else { return }   // a second signal while the first is restoring
                 ran = true
                 GlowEngine.shared.stop(quitting: true)
+                DesktopPictureSync.restoreAll()   // signal exit skips AppModel.shutdown()
                 QuitCoordinator.handBack()
                 signal(sig, SIG_DFL)
                 raise(sig)
@@ -262,6 +263,7 @@ enum Snapshotter {
             write("menubar", host)
         }
         NowPlaying.shared.showSampleForSnapshot()
+        WallpaperLibrary.shared.installSample()
         if let w = mainWindow() {
             var f = w.frame; f.size.height = 1000; w.setFrame(f, display: true)
         }
@@ -275,6 +277,7 @@ enum Snapshotter {
             case .haptics: page = AnyView(HapticsView())
             case .sounds: page = AnyView(SoundsView())
             case .audio: page = AnyView(AudioInputView())
+            case .wallpaper: page = AnyView(WallpaperPage())
             case .permissions: page = AnyView(PermissionsView())
             case .settings: page = AnyView(SettingsView())
             }
