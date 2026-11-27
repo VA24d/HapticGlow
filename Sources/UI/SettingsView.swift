@@ -26,6 +26,7 @@ enum AppearanceChoice: String, CaseIterable, Identifiable {
 
 struct SettingsView: View {
     @State private var model = AppModel.shared
+    @State private var nowPlaying = NowPlaying.shared
     @AppStorage(AppearanceChoice.key) private var appearance = AppearanceChoice.system.rawValue
     @State private var loginStatus = SMAppService.mainApp.status
     @State private var loginError: String?
@@ -68,23 +69,28 @@ struct SettingsView: View {
                               help: "Higher catches softer kicks; lower ignores everything but the hardest hits.")
                 }
 
+                group("Now playing") {
+                    ToggleRow(title: "Genre presets",
+                              subtitle: "Shape the haptics and glow to the genre of the song in Apple Music, such as a stronger kick for hip-hop. Songs you saved always win.",
+                              isOn: $nowPlaying.genrePresets)
+                    HStack {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Saved songs").font(Theme.Font.label)
+                            Text(nowPlaying.savedSongCount == 0 ? "None yet. Use Remember for this song while one plays."
+                                 : "\(nowPlaying.savedSongCount) saved on this Mac.")
+                                .font(Theme.Font.caption).foregroundStyle(Theme.textTertiary)
+                        }
+                        Spacer()
+                        Button("Forget All") { nowPlaying.forgetAll() }.disabled(nowPlaying.savedSongCount == 0)
+                    }
+                }
+
                 group("Sync") {
                     ToggleRow(title: "Auto (device latency)",
                               subtitle: model.outputDeviceName.isEmpty ? "Delay light and haptics by the output device's latency."
                                   : "\(model.outputDeviceName) \u{00B7} \(Int(model.outputLatencyMs.rounded())) ms measured",
                               isOn: $model.sync.auto)
-                    VStack(alignment: .leading, spacing: 6) {
-                        HStack {
-                            Text("Fine-tune").font(Theme.Font.label)
-                            Spacer()
-                            Text(String(format: "%+.0f ms", model.sync.offsetMs)).font(Theme.Font.numeral).foregroundStyle(Theme.textSecondary)
-                            Button("Reset") { model.sync.offsetMs = 0 }.disabled(model.sync.offsetMs == 0)
-                        }
-                        Slider(value: $model.sync.offsetMs, in: -300...300)
-                        Text("Later if the light leads the beat, earlier if it lags. Bluetooth headphones play audio roughly 150 to 250 ms after the Mac captures it, so light and haptics are held back to match.")
-                            .font(Theme.Font.caption).foregroundStyle(Theme.textTertiary)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
+                    SyncFineTune()
                 }
 
                 group("Recovery") {

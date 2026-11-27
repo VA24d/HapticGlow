@@ -13,6 +13,7 @@ struct MenuBarView: View {
         VStack(spacing: 10) {
             header
             statusModule
+            NowPlayingMenuRow()
             modesModule
             brightnessModule
             togglesModule

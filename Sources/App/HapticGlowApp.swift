@@ -261,6 +261,7 @@ enum Snapshotter {
             host.layoutSubtreeIfNeeded()
             write("menubar", host)
         }
+        NowPlaying.shared.showSampleForSnapshot()
         if let w = mainWindow() {
             var f = w.frame; f.size.height = 1000; w.setFrame(f, display: true)
         }

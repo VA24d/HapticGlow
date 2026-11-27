@@ -283,6 +283,7 @@ final class HapticEngine: @unchecked Sendable {
         var govT = 0.0
         var idleStreak = 0
         var silentSince = 0.0
+        var diagT = 0.0, diagPrev = [UInt64](repeating: 0, count: 8)
         var lastLoopSec = apsT
 
         while lock.withLock({ running && gen == g }) {
@@ -367,6 +368,21 @@ final class HapticEngine: @unchecked Sendable {
                 }
             }
             if musicMode0(c) { planner.observe(f) }
+
+            // ---- music diagnostics: one log line per 30 s of music mode (where do the beats go?)
+            if live && c.mode == .music && !f.silent {
+                if diagT == 0 { diagT = now; diagPrev = planner.diagCounters(glowOnsets: GlowEngine.shared.onsetsSeen) }
+                else if now - diagT >= 30 {
+                    let cur = planner.diagCounters(glowOnsets: GlowEngine.shared.onsetsSeen)
+                    let d = zip(cur, diagPrev).map { $0 &- $1 }
+                    let secs = now - diagT
+                    diagT = now; diagPrev = cur
+                    DispatchQueue.global(qos: .utility).async {
+                        Log.write(String(format: "[music] %.0f s: kicks %llu snares %llu hats %llu | masked %llu dropped %llu retriggerBlocked %llu rateBlocked %llu | glow onsets %llu",
+                                         secs, d[0], d[1], d[2], d[3], d[4], d[5], d[6], d[7]))
+                    }
+                }
+            } else { diagT = 0 }
 
             // ---- trigger voices
             let musicMode = live && c.mode == .music

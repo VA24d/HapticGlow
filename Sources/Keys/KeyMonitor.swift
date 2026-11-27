@@ -182,6 +182,7 @@ private let flagCapsLock: UInt64 = 0x10000
 
 /// Per-modifier last-known state (tap thread only).
 private nonisolated(unsafe) var modDown = [Bool](repeating: false, count: 256)
+private nonisolated(unsafe) var gateDropped = [Bool](repeating: false, count: 256)   // key-downs KeyGate swallowed
 
 /// Last emit time per (key code, direction), tap thread only. Some hardware sends an F-row key both as a
 /// regular key event and as NX_SYSDEFINED; the second report within this window is dropped.
@@ -228,6 +229,14 @@ private func keyTapCallback(proxy: CGEventTapProxy, type: CGEventType, event: CG
             }
         }
         return passthrough
+    }
+
+    // Tap-along calibration is listening: its presses must not reach glow, haptics or key sounds. The release
+    // of a dropped press is dropped too, so no key is left looking pressed.
+    if type != .flagsChanged {
+        let k = Int(UInt16(truncatingIfNeeded: event.getIntegerValueField(.keyboardEventKeycode)) & 0xFF)
+        if type == .keyDown && KeyGate.suppress.load(ordering: .relaxed) { gateDropped[k] = true; return passthrough }
+        if type == .keyUp && gateDropped[k] { gateDropped[k] = false; return passthrough }
     }
 
     let now = hostNow()

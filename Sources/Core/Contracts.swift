@@ -180,6 +180,25 @@ final class FeatureBus: @unchecked Sendable {
         return ring[(oldest + lo) % cap]
     }
 
+    /// Onsets (capture time `lastOnsetTime`, strength) the analyzer published after `since`, oldest first, read from
+    /// the history ring (~8 s). For the tap-along calibration; call from a UI timer, never from a realtime thread.
+    func recentOnsets(since: Double) -> [(time: Double, strength: Float)] {
+        lock.lock(); defer { lock.unlock() }
+        var out: [(time: Double, strength: Float)] = []
+        let cap = FeatureBus.ringCap
+        let oldest = (ringHead - ringCount + cap) % cap
+        var lastCount: UInt64 = 0
+        for k in 0..<ringCount {
+            let f = ring[(oldest + k) % cap]
+            if k == 0 { lastCount = f.onsetCount; continue }
+            if f.onsetCount != lastCount {
+                lastCount = f.onsetCount
+                if f.lastOnsetTime > since { out.append((f.lastOnsetTime, f.onsetStrength)) }
+            }
+        }
+        return out
+    }
+
     /// Latest frame (any thread).
     func latest() -> AudioFeatures { lock.withLock { _latest } }
 
@@ -427,15 +446,36 @@ enum HapticFeel: String, CaseIterable, Codable, Sendable, Identifiable {
 /// Audio-to-ear sync settings (see SyncClock).
 struct SyncConfig: Sendable, Equatable, Codable {
     var auto: Bool = true           // use the output device's reported latency
-    var offsetMs: Double = 0        // fine-tune, -300...300 ms, positive = later
+    /// Fine-tune for output devices without their own entry, -300...300 ms, positive = later. Also what configs
+    /// saved before per-device offsets hold.
+    var offsetMs: Double = 0
+    /// Fine-tune per output device, keyed by the device UID (kAudioDevicePropertyDeviceUID), same units as `offsetMs`.
+    var deviceOffsets: [String: Double] = [:]
 
-    enum CodingKeys: String, CodingKey { case auto, offsetMs }
+    enum CodingKeys: String, CodingKey { case auto, offsetMs, deviceOffsets }
     init() {}
     init(from decoder: Decoder) throws {
         self.init()
         let c = try decoder.container(keyedBy: CodingKeys.self)
         auto = ((try? c.decodeIfPresent(Bool.self, forKey: .auto)) ?? nil) ?? auto
         if let v = (try? c.decodeIfPresent(Double.self, forKey: .offsetMs)) ?? nil, v.isFinite { offsetMs = min(300, max(-300, v)) }
+        if let m = (try? c.decodeIfPresent([String: Double].self, forKey: .deviceOffsets)) ?? nil {
+            for (k, v) in m.prefix(64) where !k.isEmpty && v.isFinite { deviceOffsets[k] = min(300, max(-300, v)) }
+        }
+    }
+
+    /// Fine-tune in effect for the device `uid` (the global value for devices never tuned).
+    func offsetMs(for uid: String) -> Double { deviceOffsets[uid] ?? offsetMs }
+    /// True when `uid` has its own fine-tune.
+    func hasOffset(for uid: String) -> Bool { deviceOffsets[uid] != nil }
+    /// Stores the fine-tune for one device. An empty uid (device unknown) changes the global value.
+    mutating func setOffset(_ ms: Double, for uid: String) {
+        let v = min(300, max(-300, ms.isFinite ? ms : 0))
+        if uid.isEmpty { offsetMs = v } else if deviceOffsets[uid] != nil || deviceOffsets.count < 64 { deviceOffsets[uid] = v }
+    }
+    /// Drops the device's own fine-tune so it follows the global value again.
+    mutating func resetOffset(for uid: String) {
+        if uid.isEmpty { offsetMs = 0 } else { deviceOffsets[uid] = nil }
     }
 }
 

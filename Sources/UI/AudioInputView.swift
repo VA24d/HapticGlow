@@ -205,6 +205,7 @@ struct AudioSourceCard: View {
 /// Delay currently applied between hearing a beat and firing glow and haptics.
 struct SyncDelayCard: View {
     @State private var model = AppModel.shared
+    @State private var showTune = false
 
     var body: some View {
         Polled(every: 0.5, read: { Int((SyncClock.shared.delay * 1000).rounded()) }) { ms in
@@ -217,7 +218,11 @@ struct SyncDelayCard: View {
                     }
                     Spacer()
                     Text("\(ms) ms").font(Theme.Font.numeral).foregroundStyle(Theme.textSecondary)
-                    Button("Adjust") { model.selection = .settings }.controlSize(.small)
+                    Button(showTune ? "Hide" : "Adjust") { showTune.toggle() }.controlSize(.small)
+                }
+                if showTune {
+                    Divider().padding(.vertical, 4)
+                    SyncFineTune()
                 }
             }
         }
@@ -226,7 +231,8 @@ struct SyncDelayCard: View {
     private var detail: String {
         let name = model.outputDeviceName.isEmpty ? "Output" : model.outputDeviceName
         let dev = model.sync.auto ? "\(name) reports \(Int(model.outputLatencyMs.rounded())) ms" : "Device latency off"
-        let off = model.sync.offsetMs == 0 ? "" : String(format: ", fine-tune %+.0f ms", model.sync.offsetMs)
+        let own = model.sync.offsetMs(for: model.outputDeviceUID)
+        let off = own == 0 ? "" : String(format: ", fine-tune %+.0f ms", own)
         return "Glow and haptics wait for the sound to reach your ears. " + dev + off + "."
     }
 }

@@ -12,6 +12,7 @@ struct DashboardView: View {
             VStack(alignment: .leading, spacing: Theme.Space.xl) {
                 PageHeader(title: "Dashboard", subtitle: "Your keyboard, trackpad and audio, live.")
                 banners
+                NowPlayingCard()
                 visualizerCard
                 StatsRow()
                 enginesRow

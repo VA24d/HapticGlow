@@ -391,6 +391,10 @@ final class AudioSourceMonitor: @unchecked Sendable {
     var current: AutoSourceStatus { q.sync { status } }
 
     /// Synchronously refreshes source state on `q` (for offline probes using injected providers).
+    /// The now-playing genre is spoken word (podcast, audiobook): prefer the Movie feel while something plays.
+    func setSpokenWordHint(_ on: Bool) { q.async { if self.spokenHint != on { self.spokenHint = on; self.reevaluate() } } }
+    private var spokenHint = false
+
     func refreshNow() { q.sync { self.refreshProcesses() } }
     /// Synchronously simulates app activation on `q` (for offline probes).
     func handleAppActivation(bundleID: String?) { q.sync { self.onAppActivated(bundleID) } }
@@ -653,11 +657,12 @@ final class AudioSourceMonitor: @unchecked Sendable {
         }
         lastBasis = res.basis
         if changed { Log.write("[auto] mode -> \(hyst.current.rawValue) (\(res.label), \(res.basis.rawValue))") }
-        if let sink = engineSink { sink(hyst.current) } else { HapticEngine.shared.setAutoMode(hyst.current) }
+        let picked = (spokenHint && res.basis != .idle) ? HapticMode.movie : hyst.current
+        if let sink = engineSink { sink(picked) } else { HapticEngine.shared.setAutoMode(picked) }
         var s = status
         s.active = true
         s.playing = res.basis != .idle
-        s.mode = hyst.current
+        s.mode = picked
         s.source = res.label
         s.basis = res.basis
         s.note = noteForBrowsers(infos)

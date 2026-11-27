@@ -27,7 +27,7 @@
 	<key>LSMinimumSystemVersion</key>
 	<string>26.0</string>
 	<key>NSAppleEventsUsageDescription</key>
-	<string>HapticGlow asks your browser for the address of the tab that is playing sound, so it can use the Music feel for music sites and the Movie feel for video sites. Only the address and title are read, on your Mac, and nothing is saved or sent anywhere.</string>
+	<string>HapticGlow asks your browser for the address of the tab that is playing sound, so it can use the Music feel for music sites and the Movie feel for video sites. It can also ask Music or Spotify, only when one is already open, which song is playing. Only the address, title, song name, artist and genre are read, on your Mac, and nothing is sent anywhere.</string>
 	<key>NSAudioCaptureUsageDescription</key>
 	<string>HapticGlow listens to what your Mac is playing to pulse the keyboard backlight and trackpad in time with the music. Audio is analysed in memory for levels and beats only. Nothing is recorded, saved or sent anywhere.</string>
 	<key>NSHighResolutionCapable</key>
