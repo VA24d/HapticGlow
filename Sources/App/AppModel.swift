@@ -69,6 +69,10 @@ final class AppModel {
     /// Live: current output device and its measured latency (updated by OutputLatency on the main actor).
     var outputDeviceName: String = ""
     var outputLatencyMs: Double = 0
+    /// UID of the current output device; picks which fine-tune applies (see SyncConfig.deviceOffsets).
+    var outputDeviceUID: String = "" { didSet { if oldValue != outputDeviceUID { pushSync() } } }
+    /// Current output is display audio (DisplayPort / HDMI / Thunderbolt display).
+    var outputIsDisplay = false
     var showInMenuBar: Bool = true { didSet { save(); updateMenuBarPolling() } }
     /// System-audio capture backend. Switching while running restarts capture.
     var audioSource: AudioSource = .processTap {
@@ -191,7 +195,7 @@ final class AppModel {
 
     func pushSync() {
         SyncClock.shared.autoLatency = sync.auto
-        SyncClock.shared.userOffset = sync.offsetMs / 1000
+        SyncClock.shared.userOffset = sync.offsetMs(for: outputDeviceUID) / 1000
     }
 
     private func pushHaptic() {

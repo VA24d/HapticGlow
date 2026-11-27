@@ -73,18 +73,7 @@ struct SettingsView: View {
                               subtitle: model.outputDeviceName.isEmpty ? "Delay light and haptics by the output device's latency."
                                   : "\(model.outputDeviceName) \u{00B7} \(Int(model.outputLatencyMs.rounded())) ms measured",
                               isOn: $model.sync.auto)
-                    VStack(alignment: .leading, spacing: 6) {
-                        HStack {
-                            Text("Fine-tune").font(Theme.Font.label)
-                            Spacer()
-                            Text(String(format: "%+.0f ms", model.sync.offsetMs)).font(Theme.Font.numeral).foregroundStyle(Theme.textSecondary)
-                            Button("Reset") { model.sync.offsetMs = 0 }.disabled(model.sync.offsetMs == 0)
-                        }
-                        Slider(value: $model.sync.offsetMs, in: -300...300)
-                        Text("Later if the light leads the beat, earlier if it lags. Bluetooth headphones play audio roughly 150 to 250 ms after the Mac captures it, so light and haptics are held back to match.")
-                            .font(Theme.Font.caption).foregroundStyle(Theme.textTertiary)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
+                    SyncFineTune()
                 }
 
                 group("Recovery") {
