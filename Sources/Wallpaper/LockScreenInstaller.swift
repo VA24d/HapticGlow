@@ -32,6 +32,8 @@ enum LockScreenInstaller {
     static var userManifest: URL { userBase.appendingPathComponent("manifest/entries.json") }
     static var userVideos: URL { userBase.appendingPathComponent("videos", isDirectory: true) }
     static var userThumbs: URL { userBase.appendingPathComponent("thumbnails", isDirectory: true) }
+    /// HEIF previews (the entry's previewImage), one per entry.
+    static var userSnapshots: URL { userBase.appendingPathComponent(LockScreenCatalog.previewFolder, isDirectory: true) }
     static var userCatalogPresent: Bool { FileManager.default.fileExists(atPath: userManifest.path) }
 
     static var customerURL: URL { URL(fileURLWithPath: LockScreenCatalog.customerPath, isDirectory: true) }
@@ -83,33 +85,38 @@ enum LockScreenInstaller {
         defer { try? FileManager.default.removeItem(at: stage) }
         let id = LockScreenCatalog.assetID(for: item.id)
         let size = LockScreenExporter.targetSize(screen: screen)
-        Log.write("[wallpaper] lock screen: exporting \(item.title) as \(id.prefix(8)) at \(Int(size.width))x\(Int(size.height)), fit \(fit.rawValue), \(user ? "user catalog" : "system catalog")")
-        let files: (mov: URL, jpg: URL)
+        Log.write("[wallpaper] lock screen: exporting \(item.title) as \(id.prefix(8)) at \(Int(LockScreenExporter.canvas.width))x\(Int(LockScreenExporter.canvas.height)) HEVC Main10, \(LockScreenExporter.fps) fps, fit \(fit.rawValue), \(user ? "user catalog" : "system catalog")")
+        let files: (mov: URL, preview: URL)
         do { files = try await LockScreenExporter.export(item: item, mediaURL: mediaURL, fit: fit, size: size, id: id, into: stage) }
         catch { throw LockScreenError.failed(error.localizedDescription) }
         let asset = LockScreenCatalog.Asset(id: id, title: item.title)
 
         if user, let userData {
             let fm = FileManager.default
-            let video = userVideos.appendingPathComponent("\(id).mov"), thumb = userThumbs.appendingPathComponent("\(id).png")
-            let links = LockScreenCatalog.Links(video: video.absoluteURL.absoluteString, preview: thumb.absoluteURL.absoluteString)
+            let video = userVideos.appendingPathComponent("\(id).mov")
+            let preview = userSnapshots.appendingPathComponent("\(id).heic"), thumb = userThumbs.appendingPathComponent("\(id).png")
+            let links = LockScreenCatalog.Links(video: video.absoluteURL.absoluteString, preview: preview.absoluteURL.absoluteString)
             let newManifest: Data
             do { newManifest = try LockScreenCatalog.adding(asset, to: userData, links: links) } catch { throw LockScreenError.failed(error.localizedDescription) }
             try backUpOriginal(userData, next: userManifest)
             do {
                 try fm.createDirectory(at: userVideos, withIntermediateDirectories: true)
+                try fm.createDirectory(at: userSnapshots, withIntermediateDirectories: true)
                 try fm.createDirectory(at: userThumbs, withIntermediateDirectories: true)
                 try replace(video, with: files.mov)
-                if let src = CGImageSourceCreateWithURL(files.jpg as CFURL, nil), let img = CGImageSourceCreateImageAtIndex(src, 0, nil) {
-                    WallpaperLibrary.writePNG(img, to: thumb)
+                try replace(preview, with: files.preview)
+                if let src = CGImageSourceCreateWithURL(files.preview as CFURL, nil), let img = CGImageSourceCreateImageAtIndex(src, 0, nil),
+                   let small = WallpaperLibrary.downsample(img, maxPixel: 480) {
+                    WallpaperLibrary.writePNG(small, to: thumb)
                 }
                 try newManifest.write(to: userManifest, options: .atomic)
             } catch {
-                try? fm.removeItem(at: video); try? fm.removeItem(at: thumb)
+                for f in [video, preview, thumb] { try? fm.removeItem(at: f) }
+                Log.write("[wallpaper] lock screen: install failed, files removed: \(error.localizedDescription)")
                 throw LockScreenError.failed("Could not write the Aerial catalog: \(error.localizedDescription)")
             }
             remember(asset)
-            Log.write("[wallpaper] lock screen: wrote \(video.lastPathComponent), \(thumb.lastPathComponent) and the catalog entry for \(id.prefix(8))")
+            Log.write("[wallpaper] lock screen: wrote \(video.lastPathComponent), \(preview.lastPathComponent), \(thumb.lastPathComponent) and the catalog entry for \(id.prefix(8))")
             restartAgents()
             Log.write("[wallpaper] lock screen: installed \(id.prefix(8)) in the user catalog")
             return String(format: afterInstall, item.title)
@@ -151,6 +158,7 @@ enum LockScreenInstaller {
             catch { throw LockScreenError.failed("Could not write the Aerial catalog: \(error.localizedDescription)") }
             for id in ids where UUID(uuidString: id) != nil {
                 try? FileManager.default.removeItem(at: userVideos.appendingPathComponent("\(id).mov"))
+                try? FileManager.default.removeItem(at: userSnapshots.appendingPathComponent("\(id).heic"))
                 try? FileManager.default.removeItem(at: userThumbs.appendingPathComponent("\(id).png"))
             }
             restartAgents()
@@ -213,7 +221,7 @@ enum LockScreenInstaller {
         do {
             for m in missing {
                 let links = LockScreenCatalog.Links(video: userVideos.appendingPathComponent("\(m.id).mov").absoluteURL.absoluteString,
-                                                    preview: userThumbs.appendingPathComponent("\(m.id).png").absoluteURL.absoluteString)
+                                                    preview: userSnapshots.appendingPathComponent("\(m.id).heic").absoluteURL.absoluteString)
                 next = try LockScreenCatalog.adding(.init(id: m.id, title: m.title), to: next, links: links)
             }
             try backUpOriginal(data, next: userManifest)

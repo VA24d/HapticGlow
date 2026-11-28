@@ -21,19 +21,18 @@ enum LockScreenExportError: Error, LocalizedError {
 }
 
 enum LockScreenExporter {
-    /// The loop runs at least this long, repeating the animation; capped so files stay small and export quickly.
-    static let minSeconds = 20.0
-    static let maxSeconds = 60.0
-    /// 4K 10-bit HEVC at 60 fps with a 30 fps base temporal sub-layer (plays cleanly across lock/unlock cycles on macOS 26/27).
+    /// Target length of the video-only loop (about 80 s, as in Apple's aerials). A clip or animation longer than this plays once.
+    static let loopSeconds = 80.0
+    /// 4K HEVC Main10 (10-bit 4:2:0, Rec.709) at 30 fps, with a 15 fps base temporal layer (two sub-layers).
     static let canvas = CGSize(width: 3840, height: 2160)
-    static let fps: Int64 = 60
+    static let fps: Int64 = 30
+    static let pixelFormat = kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange
+    static let bitRate = 12_000_000
 
-    /// How many times to repeat an animation of `length` seconds so the loop is 20 to 60 s long.
+    /// How many times to repeat an animation of `length` seconds so the loop is about `loopSeconds` long.
     static func repeats(length: Double) -> Int {
         guard length > 0 else { return 1 }
-        let n = Int((minSeconds / length).rounded(.up))
-        let capped = max(1, Int((maxSeconds / length).rounded(.down)))
-        return max(1, min(n, capped))
+        return max(1, Int((loopSeconds / length).rounded()))
     }
 
     /// Even pixel size of the screen the loop is meant for (only its aspect ratio matters).
@@ -53,17 +52,28 @@ enum LockScreenExporter {
         return CGRect(x: ((canvas.width - w) / 2).rounded(), y: ((canvas.height - h) / 2).rounded(), width: w, height: h)
     }
 
-    /// Writes `<id>.mov` and `<id>.jpg` into `dir`. `size` is the target screen's pixel size. Heavy work: call off the main thread.
-    static func export(item: WallpaperInfo, mediaURL: URL, fit: WallpaperFit, size: CGSize, id: String, into dir: URL) async throws -> (mov: URL, jpg: URL) {
-        let mov = dir.appendingPathComponent("\(id).mov"), jpg = dir.appendingPathComponent("\(id).jpg")
+    /// Writes `<id>.mov` and a HEIF preview `<id>.heic` (frame at t=0) into `dir`. `size` is the target screen's pixel size,
+    /// used only for the picture's aspect ratio inside the 3840x2160 canvas. Heavy work: call off the main thread.
+    static func export(item: WallpaperInfo, mediaURL: URL, fit: WallpaperFit, size: CGSize, id: String, into dir: URL) async throws -> (mov: URL, preview: URL) {
+        let mov = dir.appendingPathComponent("\(id).mov"), heic = dir.appendingPathComponent("\(id).heic")
         try? FileManager.default.removeItem(at: mov)
         let region = visibleRegion(screen: size)
         switch item.kind {
         case .video: try await exportVideo(mediaURL, fit: fit, region: region, to: mov)
-        case .animatedImage, .image: try await exportImages(mediaURL, fit: fit, region: region, to: mov, jpg: jpg, animated: item.kind == .animatedImage)
+        case .animatedImage, .image: try await exportImages(mediaURL, fit: fit, region: region, to: mov, preview: heic, animated: item.kind == .animatedImage)
         }
-        if item.kind == .video { try await videoPreview(mov, region: region, to: jpg) }
-        return (mov, jpg)
+        if item.kind == .video { try await videoPreview(mov, region: region, to: heic) }
+        return (mov, heic)
+    }
+
+    /// HEIF still (the entry's preview image).
+    static func writeHEIF(_ image: CGImage, to url: URL) throws {
+        try? FileManager.default.removeItem(at: url)
+        guard let dest = CGImageDestinationCreateWithURL(url as CFURL, "public.heic" as CFString, 1, nil) else {
+            throw LockScreenExportError.writer("HEIF encoder unavailable")
+        }
+        CGImageDestinationAddImage(dest, image, [kCGImageDestinationLossyCompressionQuality: 0.9] as CFDictionary)
+        guard CGImageDestinationFinalize(dest) else { throw LockScreenExportError.writer("could not write the HEIF preview") }
     }
 
     // MARK: Writer
@@ -94,7 +104,7 @@ enum LockScreenExporter {
             kVTVideoEncoderSpecification_EnableHardwareAcceleratedVideoEncoder: true
         ]
         let srcAttrs: [CFString: Any] = [
-            kCVPixelBufferPixelFormatTypeKey: kCVPixelFormatType_32BGRA,
+            kCVPixelBufferPixelFormatTypeKey: pixelFormat,
             kCVPixelBufferWidthKey: Int(w),
             kCVPixelBufferHeightKey: Int(h),
             kCVPixelBufferIOSurfacePropertiesKey: [:] as CFDictionary
@@ -122,16 +132,18 @@ enum LockScreenExporter {
         _ = setProp(kVTCompressionPropertyKey_ExpectedFrameRate, NSNumber(value: fps))
         _ = setProp(kVTCompressionPropertyKey_MaxKeyFrameInterval, NSNumber(value: fps))
         _ = setProp(kVTCompressionPropertyKey_MaxKeyFrameIntervalDuration, NSNumber(value: 1.0))
-        _ = setProp(kVTCompressionPropertyKey_AverageBitRate, NSNumber(value: 16_000_000))
+        _ = setProp(kVTCompressionPropertyKey_AverageBitRate, NSNumber(value: bitRate))
         _ = setProp(kVTCompressionPropertyKey_ColorPrimaries, kCVImageBufferColorPrimaries_ITU_R_709_2)
         _ = setProp(kVTCompressionPropertyKey_TransferFunction, kCVImageBufferTransferFunction_ITU_R_709_2)
         _ = setProp(kVTCompressionPropertyKey_YCbCrMatrix, kCVImageBufferYCbCrMatrix_ITU_R_709_2)
-        // Required by WallpaperAerialsExtension: split the HEVC stream into two temporal sub-layers
-        // (base layer at half rate + enhancement layer), producing tscl/tsas boxes and VPS sub-layer syntax.
-        _ = setProp("NumberOfTemporalLayers" as CFString, NSNumber(value: 2))
+        // HEVC temporal sub-layers: a base layer at half the rate (15 fps) and the enhancement layer on top, which
+        // gives the tscl/tsas sample groups Apple's aerials carry. Logged so a failed property is visible.
         let blStatus = setProp(kVTCompressionPropertyKey_BaseLayerFrameRateFraction, NSNumber(value: 0.5))
         if blStatus != noErr {
-            _ = setProp(kVTCompressionPropertyKey_BaseLayerFrameRate, NSNumber(value: Double(fps) * 0.5))
+            let fallback = setProp(kVTCompressionPropertyKey_BaseLayerFrameRate, NSNumber(value: Double(fps) / 2))
+            Log.write("[wallpaper] lock screen: base layer fraction not accepted (\(blStatus)), frame rate fallback \(fallback)")
+        } else {
+            Log.write("[wallpaper] lock screen: base layer set to half the frame rate")
         }
 
         let prepStatus = VTCompressionSessionPrepareToEncodeFrames(session)
@@ -220,56 +232,91 @@ enum LockScreenExporter {
 
     // MARK: Images and GIF/APNG/WebP
 
-    private static func exportImages(_ url: URL, fit: WallpaperFit, region: CGRect, to mov: URL, jpg: URL, animated: Bool) async throws {
+    private static func exportImages(_ url: URL, fit: WallpaperFit, region: CGRect, to mov: URL, preview: URL, animated: Bool) async throws {
         // Native frames: nothing is resampled before the (nearest-neighbour for pixel art) fit to the video size.
         guard let seq = FrameSequence.shared(url: url, screenMaxPixel: 100_000) else { throw LockScreenExportError.unreadable }
-        let delays = animated && seq.count > 1 ? seq.delays : [maxSeconds]
+        let delays = animated && seq.count > 1 ? seq.delays : [loopSeconds]
         let length = delays.reduce(0, +)
         let reps = animated && seq.count > 1 ? repeats(length: length) : 1
         guard let first = seq.frame(0) else { throw LockScreenExportError.unreadable }
         let edge = EdgeColor.of(first)
 
-        // One start tick per source frame, held for its own delay: GIF timing is kept to 1/60 s.
+        // One start tick per source frame, held for its own delay: GIF timing is kept to the 30 fps grid.
         var starts: [(index: Int, tick: Int64)] = []
         var t = 0.0
         for _ in 0..<reps { for (i, d) in delays.enumerated() { starts.append((i, Int64((t * Double(fps)).rounded()))); t += max(d, 1.0 / Double(fps)) } }
         let total = Int64((t * Double(fps)).rounded())
         let startsCopy = starts
         try await write(to: mov, ticks: total) {
+            let conv = try FrameConverter()
             var tick: Int64 = 0, p = 0, shown = -1
             var buf: CVPixelBuffer?
             return { pool in
                 guard tick < total else { return nil }
                 while p + 1 < startsCopy.count && startsCopy[p + 1].tick <= tick { p += 1 }
                 if p != shown {
-                    let pb = try makePixelBuffer(pool: pool)
-                    guard let frame = seq.frame(startsCopy[p].index), render(frame, into: pb, fit: fit, region: region, edge: edge) else {
-                        throw LockScreenExportError.writer("frame \(startsCopy[p].index) could not be drawn")
+                    guard let frame = seq.frame(startsCopy[p].index) else {
+                        throw LockScreenExportError.writer("frame \(startsCopy[p].index) could not be read")
                     }
-                    buf = pb; shown = p
+                    buf = try conv.make(pool) { render(frame, into: $0, fit: fit, region: region, edge: edge) }
+                    shown = p
                 }
                 defer { tick += 1 }
                 return (buf!, tick)
             }
         }
+        // The preview is the first frame, as Apple's entries use (previewImage).
         if let img = StillComposer.compose(still: first, fit: fit, pixelSize: region.size, backing: 1, edge: edge),
            let small = WallpaperLibrary.downsample(img, maxPixel: 1920) {
-            WallpaperLibrary.writeJPEG(small, to: jpg)
+            try writeHEIF(small, to: preview)
+        } else {
+            throw LockScreenExportError.writer("the preview could not be drawn")
         }
     }
 
-    private static func makePixelBuffer(pool: CVPixelBufferPool?) throws -> CVPixelBuffer {
-        var pb: CVPixelBuffer?
-        if let pool {
-            CVPixelBufferPoolCreatePixelBuffer(nil, pool, &pb)
-        }
-        if pb == nil {
+    /// Draws each frame in 8-bit BGRA, then converts it to the encoder's 10-bit 4:2:0 Rec.709 buffers.
+    private final class FrameConverter {
+        private let scratch: CVPixelBuffer
+        private let transfer: VTPixelTransferSession
+
+        init() throws {
             let attrs: [CFString: Any] = [kCVPixelBufferIOSurfacePropertiesKey: [:] as CFDictionary]
-            CVPixelBufferCreate(kCFAllocatorDefault, Int(canvas.width), Int(canvas.height),
-                                kCVPixelFormatType_32BGRA, attrs as CFDictionary, &pb)
+            var pb: CVPixelBuffer?
+            guard CVPixelBufferCreate(kCFAllocatorDefault, Int(canvas.width), Int(canvas.height),
+                                      kCVPixelFormatType_32BGRA, attrs as CFDictionary, &pb) == kCVReturnSuccess, let pb else {
+                throw LockScreenExportError.writer("no drawing buffer")
+            }
+            var session: VTPixelTransferSession?
+            guard VTPixelTransferSessionCreate(allocator: kCFAllocatorDefault, pixelTransferSessionOut: &session) == noErr, let session else {
+                throw LockScreenExportError.writer("pixel conversion is unavailable")
+            }
+            VTSessionSetProperty(session, key: kVTPixelTransferPropertyKey_DestinationColorPrimaries, value: kCVImageBufferColorPrimaries_ITU_R_709_2)
+            VTSessionSetProperty(session, key: kVTPixelTransferPropertyKey_DestinationTransferFunction, value: kCVImageBufferTransferFunction_ITU_R_709_2)
+            VTSessionSetProperty(session, key: kVTPixelTransferPropertyKey_DestinationYCbCrMatrix, value: kCVImageBufferYCbCrMatrix_ITU_R_709_2)
+            scratch = pb
+            transfer = session
         }
-        guard let pb else { throw LockScreenExportError.writer("no pixel buffer") }
-        return pb
+
+        /// Draws into the drawing buffer, then converts the result into a buffer from `pool`.
+        func make(_ pool: CVPixelBufferPool?, draw: (CVPixelBuffer) -> Bool) throws -> CVPixelBuffer {
+            guard draw(scratch) else { throw LockScreenExportError.writer("a frame could not be drawn") }
+            return try convert(scratch, pool)
+        }
+
+        /// Converts a BGRA buffer into a 10-bit 4:2:0 buffer from `pool`.
+        func convert(_ src: CVPixelBuffer, _ pool: CVPixelBufferPool?) throws -> CVPixelBuffer {
+            var pb: CVPixelBuffer?
+            if let pool { CVPixelBufferPoolCreatePixelBuffer(nil, pool, &pb) }
+            if pb == nil {
+                let attrs: [CFString: Any] = [kCVPixelBufferIOSurfacePropertiesKey: [:] as CFDictionary]
+                CVPixelBufferCreate(kCFAllocatorDefault, Int(canvas.width), Int(canvas.height), pixelFormat, attrs as CFDictionary, &pb)
+            }
+            guard let dst = pb else { throw LockScreenExportError.writer("no encoder buffer") }
+            guard VTPixelTransferSessionTransferImage(transfer, from: src, to: dst) == noErr else {
+                throw LockScreenExportError.writer("pixel conversion failed")
+            }
+            return dst
+        }
     }
 
     /// Edge colour over the whole canvas, then the picture laid out inside the visible region.
@@ -296,7 +343,7 @@ enum LockScreenExporter {
             asset.load(.duration), track.load(.naturalSize), track.load(.preferredTransform), track.load(.nominalFrameRate)
         )
         guard duration.seconds > 0 else { throw LockScreenExportError.unreadable }
-        let clip = CMTime(seconds: min(duration.seconds, maxSeconds), preferredTimescale: 600)
+        let clip = CMTime(seconds: min(duration.seconds, loopSeconds), preferredTimescale: 600)
         let repCount = repeats(length: clip.seconds)
         let totalClipDuration = CMTimeMultiply(clip, multiplier: Int32(repCount))
         let total = Int64((totalClipDuration.seconds * Double(fps)).rounded())
@@ -341,26 +388,30 @@ enum LockScreenExporter {
                 guard let sb = out.copyNextSampleBuffer(), let pb = CMSampleBufferGetImageBuffer(sb) else { return nil }
                 return (pb, Int64((CMSampleBufferGetPresentationTimeStamp(sb).seconds * Double(fps)).rounded()))
             }
-            // Each decoded frame is held until the next one is due, so 24/30/60 fps video lands on the 60 fps timeline.
+            // Each decoded frame is held until the next one is due, so 24/30/60 fps video lands on the 30 fps timeline.
+            let conv = try FrameConverter()
             var tick: Int64 = 0
             var cur: (CVPixelBuffer, Int64)?
+            var converted: CVPixelBuffer?
             var upcoming = pull()
-            return { _ in
+            return { pool in
                 guard tick < total else { return nil }
-                while let n = upcoming, n.1 <= tick { cur = n; upcoming = pull() }
+                var changed = false
+                while let n = upcoming, n.1 <= tick { cur = n; upcoming = pull(); changed = true }
                 guard let c = cur else { throw LockScreenExportError.writer("the video has no frame at the start") }
+                if changed || converted == nil { converted = try conv.convert(c.0, pool) }
                 defer { tick += 1 }
-                return (c.0, tick)
+                return (converted!, tick)
             }
         }
     }
 
-    private static func videoPreview(_ mov: URL, region: CGRect, to jpg: URL) async throws {
+    private static func videoPreview(_ mov: URL, region: CGRect, to heic: URL) async throws {
         let gen = AVAssetImageGenerator(asset: AVURLAsset(url: mov))
         gen.appliesPreferredTrackTransform = true
         gen.maximumSize = CGSize(width: 3840, height: 3840)
         let img = try await gen.image(at: .zero).image
         let visible = img.cropping(to: region) ?? img
-        WallpaperLibrary.writeJPEG(WallpaperLibrary.downsample(visible, maxPixel: 1920) ?? visible, to: jpg)
+        try writeHEIF(WallpaperLibrary.downsample(visible, maxPixel: 1920) ?? visible, to: heic)
     }
 }

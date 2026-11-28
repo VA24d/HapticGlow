@@ -1,7 +1,7 @@
 #!/bin/bash
 # HapticGlow: copy prepared lock-screen (Aerial) files into the system catalog. Run as root, once per action.
 #   lockscreen-install.sh install|remove <stage dir> <allowed temp prefix>
-# The app builds <stage dir> in its own private temp folder: <UUID>.mov, <UUID>.jpg, entries.json and,
+# The app builds <stage dir> in its own private temp folder: <UUID>.mov, <UUID>.heic, entries.json and,
 # for "remove", remove.txt (one UUID per line, the entries to delete). Nothing else is read or written.
 set -euo pipefail
 
@@ -27,7 +27,7 @@ for f in "$STAGE_REAL"/*; do
   if [ -L "$f" ]; then die "symlink in stage: $n"; fi
   case "$n" in
     entries.json|remove.txt) ;;
-    *.mov|*.jpg) [[ "${n%.*}" =~ $UUID_RE ]] || die "bad file name: $n" ;;
+    *.mov|*.heic) [[ "${n%.*}" =~ $UUID_RE ]] || die "bad file name: $n" ;;
     *) die "unexpected file: $n" ;;
   esac
 done
@@ -45,7 +45,7 @@ if [ "$MODE" = install ]; then
   for f in "$STAGE_REAL"/*.mov; do
     if [ -f "$f" ]; then install -m 644 "$f" "$BASE/4KSDR240FPS/$(basename "$f")"; fi
   done
-  for f in "$STAGE_REAL"/*.jpg; do
+  for f in "$STAGE_REAL"/*.heic; do
     if [ -f "$f" ]; then install -m 644 "$f" "$BASE/snapshots/$(basename "$f")"; fi
   done
 else
@@ -53,14 +53,15 @@ else
   while IFS= read -r id || [ -n "$id" ]; do
     [ -n "$id" ] || continue
     [[ "$id" =~ $UUID_RE ]] || die "bad id in remove.txt"
-    rm -f "$BASE/4KSDR240FPS/$id.mov" "$BASE/snapshots/$id.jpg"
+    rm -f "$BASE/4KSDR240FPS/$id.mov" "$BASE/snapshots/$id.heic" "$BASE/snapshots/$id.jpg"
   done < "$STAGE_REAL/remove.txt"
 fi
 
 install -m 644 "$STAGE_REAL/entries.json" "$BASE/entries.json.new"
 mv -f "$BASE/entries.json.new" "$BASE/entries.json"
 
-# Make the wallpaper agents read the catalog again (launchd restarts both).
+# Make the wallpaper agents read the catalog again (launchd restarts them).
 killall WallpaperAgent 2>/dev/null || true
+killall WallpaperAerialsExtension 2>/dev/null || true
 killall idleassetsd 2>/dev/null || true
 echo "ok"

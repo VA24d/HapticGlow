@@ -45,7 +45,7 @@ enum LockScreenCatalog {
 
     /// System (admin) layout.
     static func systemLinks(_ id: String) -> Links {
-        Links(video: fileURL("\(customerPath)/\(videoFolder)/\(id).mov"), preview: fileURL("\(customerPath)/\(previewFolder)/\(id).jpg"))
+        Links(video: fileURL("\(customerPath)/\(videoFolder)/\(id).mov"), preview: fileURL("\(customerPath)/\(previewFolder)/\(id).heic"))
     }
 
     private typealias JSON = [String: Any]
