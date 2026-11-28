@@ -201,12 +201,15 @@ struct WallpaperPage: View {
             HStack {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Animated lock screen").font(Theme.Font.label).foregroundStyle(Theme.textPrimary)
-                    Text("Exports a video loop and adds it to macOS's Aerial list. Asks for your password once.")
+                    Text("Exports a 4K, 60 fps video loop (~20 s) and adds it to macOS's Aerial list; pick it in System Settings. Or use a still, which is set for you.")
                         .font(Theme.Font.caption).foregroundStyle(Theme.textTertiary)
                 }
                 Spacer()
                 if lockBusy { ProgressView().controlSize(.small) }
                 Button("Use on Lock Screen") { runLock { try await LockScreenInstaller.install(item: item, mediaURL: library.mediaURL(item),
+                        fit: model.wallpaper.fitOverrides[item.id] ?? item.defaultFit, screen: NSScreen.main) } }
+                    .controlSize(.small).disabled(lockBusy)
+                Button("Use Still on Lock Screen") { runLock { try await LockScreenInstaller.useStill(item: item, stillURL: library.stillURL(item.id),
                         fit: model.wallpaper.fitOverrides[item.id] ?? item.defaultFit, screen: NSScreen.main) } }
                     .controlSize(.small).disabled(lockBusy)
                 if LockScreenInstaller.hasAnyInstalled() {

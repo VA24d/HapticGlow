@@ -120,7 +120,7 @@ enum LockScreenCatalog {
             "id": categoryID,
             "localizedNameKey": "HapticGlow",
             "localizedDescriptionKey": "HapticGlow",
-            "preferredOrder": 100,
+            "preferredOrder": -1,
             "previewImage": preview,
             "representativeAssetID": rep,
             "subcategories": [[

@@ -243,7 +243,7 @@ final class AppModel {
         GlowEngine.shared.update(glow)
         HapticEngine.shared.update(haptic)
         startMenuBarPolling()
-        if !SnapshotMode.active { NowPlaying.shared.start(); WallpaperEngine.shared.apply(wallpaper) }
+        if !SnapshotMode.active { NowPlaying.shared.start(); WallpaperEngine.shared.apply(wallpaper); LockScreenInstaller.reapplyIfNeeded() }
         KeySoundEngine.shared.update(sound)
         refreshPermissions()
 

@@ -36,7 +36,16 @@ enum LockScreenInstaller {
 
     static var customerURL: URL { URL(fileURLWithPath: LockScreenCatalog.customerPath, isDirectory: true) }
     static var entriesURL: URL { customerURL.appendingPathComponent("entries.json") }
-    static var backupsFolder: URL { WallpaperLibrary.defaultRoot.deletingLastPathComponent().appendingPathComponent("lockscreen-backups", isDirectory: true) }
+    /// The app's own data folder (`HapticGlow` in Application Support); a sibling of the test base when one is set.
+    static var workRoot: URL {
+        userBaseOverride.map { $0.deletingLastPathComponent().appendingPathComponent("HapticGlowData", isDirectory: true) }
+            ?? WallpaperLibrary.defaultRoot.deletingLastPathComponent()
+    }
+    static var backupsFolder: URL { workRoot.appendingPathComponent("lockscreen-backups", isDirectory: true) }
+    static var stillsFolder: URL { workRoot.appendingPathComponent(LockScreenIndex.stillsFolderName, isDirectory: true) }
+    /// The wallpaper store macOS reads the Desktop and Idle (screen saver / lock screen) choices from.
+    static var indexURL: URL { userBase.deletingLastPathComponent().appendingPathComponent("Store/Index.plist") }
+    private static var stateURL: URL { workRoot.appendingPathComponent("lockscreen-state.json") }
 
     /// The system folder has to exist (it is created by macOS); the entries.json inside it may not exist yet.
     static func systemLayoutPresent() -> Bool {
@@ -51,9 +60,12 @@ enum LockScreenInstaller {
         LockScreenCatalog.installedIDs(in: try? Data(contentsOf: activeEntries)).contains(LockScreenCatalog.assetID(for: itemID))
     }
 
-    static func hasAnyInstalled() -> Bool { !LockScreenCatalog.installedIDs(in: try? Data(contentsOf: activeEntries)).isEmpty }
+    static func hasAnyInstalled() -> Bool {
+        if !LockScreenCatalog.installedIDs(in: try? Data(contentsOf: activeEntries)).isEmpty { return true }
+        return (try? Data(contentsOf: indexURL)).flatMap { try? LockScreenIndex.decode($0).root }.map { LockScreenIndex.ourIdleCount($0) > 0 } ?? false
+    }
 
-    private static let afterInstall = "Open System Settings, Wallpaper, then pick \"%@\" in the HapticGlow category (and as the screen saver if you want it there). macOS plays it animated on the lock screen. If it does not appear yet, sign out and back in."
+    private static let afterInstall = "Added \"%@\" to the Aerial list (4K, 60 fps). It is not selected for you: open System Settings, Wallpaper, scroll to the HapticGlow category under Aerials and pick it as the screen saver, which is what plays on the lock screen. If it does not appear yet, sign out and back in."
 
     // MARK: Install
 
@@ -96,7 +108,9 @@ enum LockScreenInstaller {
                 try? fm.removeItem(at: video); try? fm.removeItem(at: thumb)
                 throw LockScreenError.failed("Could not write the Aerial catalog: \(error.localizedDescription)")
             }
-            restartWallpaperAgent()
+            remember(asset)
+            Log.write("[wallpaper] lock screen: wrote \(video.lastPathComponent), \(thumb.lastPathComponent) and the catalog entry for \(id.prefix(8))")
+            restartAgents()
             Log.write("[wallpaper] lock screen: installed \(id.prefix(8)) in the user catalog")
             return String(format: afterInstall, item.title)
         }
@@ -114,11 +128,23 @@ enum LockScreenInstaller {
     /// Removes only HapticGlow entries (and their files) and leaves every other entry as it was.
     static func removeAll() async throws -> String {
         let user = userCatalogPresent
-        guard user || systemLayoutPresent() else { throw LockScreenError.layoutMissing }
-        guard let existing = try? Data(contentsOf: activeEntries) else { return "Nothing to remove." }
+        let hadStill = (try? Data(contentsOf: indexURL)).flatMap { try? LockScreenIndex.decode($0).root }.map { LockScreenIndex.ourIdleCount($0) > 0 } ?? false
+        if hadStill { restoreIndex() }
+        guard user || systemLayoutPresent() else {
+            if hadStill { restartAgents(); return "The lock screen picture was put back as it was before." }
+            throw LockScreenError.layoutMissing
+        }
+        guard let existing = try? Data(contentsOf: activeEntries) else {
+            if hadStill { restartAgents(); return "The lock screen picture was put back as it was before." }
+            return "Nothing to remove."
+        }
         let data: Data, ids: [String]
         do { (data, ids) = try LockScreenCatalog.removingOurs(from: existing) } catch { throw LockScreenError.failed(error.localizedDescription) }
-        guard !ids.isEmpty else { return "Nothing to remove." }
+        if ids.isEmpty {
+            if hadStill { restartAgents(); return "The lock screen picture was put back as it was before." }
+            return "Nothing to remove."
+        }
+        saveState(State())
         if user {
             try backUpOriginal(existing, next: userManifest)
             do { try data.write(to: userManifest, options: .atomic) }
@@ -127,7 +153,7 @@ enum LockScreenInstaller {
                 try? FileManager.default.removeItem(at: userVideos.appendingPathComponent("\(id).mov"))
                 try? FileManager.default.removeItem(at: userThumbs.appendingPathComponent("\(id).png"))
             }
-            restartWallpaperAgent()
+            restartAgents()
         } else {
             let script = try scriptURL()
             let stage = try makeStage()
@@ -141,13 +167,124 @@ enum LockScreenInstaller {
         return "Removed from the lock screen catalog. If you picked one of these in System Settings, choose another wallpaper there."
     }
 
-    /// Restarts the signed-in user's wallpaper agent (launchd starts it again). No sudo.
-    private static func restartWallpaperAgent() {
-        guard userBaseOverride == nil else { return }
-        let p = Process()
-        p.executableURL = URL(fileURLWithPath: "/usr/bin/killall")
-        p.arguments = ["WallpaperAgent"]
-        try? p.run()
+    /// Restarts the signed-in user's wallpaper agent and Aerials extension (launchd starts them again). No sudo.
+    private static func restartAgents() {
+        guard userBaseOverride == nil else { Log.write("[wallpaper] lock screen: test base, wallpaper processes not restarted"); return }
+        for name in ["WallpaperAgent", "WallpaperAerialsExtension"] {
+            let p = Process()
+            p.executableURL = URL(fileURLWithPath: "/usr/bin/killall")
+            p.arguments = [name]
+            p.standardError = FileHandle.nullDevice
+            do { try p.run(); p.waitUntilExit(); Log.write("[wallpaper] lock screen: restarted \(name) (exit \(p.terminationStatus))") }
+            catch { Log.write("[wallpaper] lock screen: could not restart \(name): \(error.localizedDescription)") }
+        }
+    }
+
+    // MARK: Entries macOS drops, and the still option
+
+    private struct State: Codable { var items: [Item] = []; struct Item: Codable { var id: String; var title: String } }
+    private static func loadState() -> State { (try? JSONDecoder().decode(State.self, from: Data(contentsOf: stateURL))) ?? State() }
+    private static func saveState(_ s: State) {
+        try? FileManager.default.createDirectory(at: workRoot, withIntermediateDirectories: true)
+        if let d = try? JSONEncoder().encode(s) { try? d.write(to: stateURL, options: .atomic) }
+    }
+    private static func remember(_ a: LockScreenCatalog.Asset) {
+        var s = loadState()
+        s.items.removeAll { $0.id == a.id }
+        s.items.append(.init(id: a.id, title: a.title))
+        saveState(s)
+    }
+
+    /// At launch: when macOS replaced entries.json with a new Aerial list (our entries are gone but our files remain),
+    /// adds the entries back and restarts the two wallpaper processes. Returns how many entries were re-added.
+    @discardableResult
+    static func reapplyIfNeeded() -> Int {
+        guard userCatalogPresent, let data = try? Data(contentsOf: userManifest) else { return 0 }
+        let have = Set(LockScreenCatalog.installedIDs(in: data))
+        let missing = loadState().items.filter {
+            !have.contains($0.id) && FileManager.default.fileExists(atPath: userVideos.appendingPathComponent("\($0.id).mov").path)
+        }
+        guard !missing.isEmpty else { return 0 }
+        guard (try? LockScreenCatalog.checkUserSchema(data)) != nil else {
+            Log.write("[wallpaper] lock screen: catalog was replaced but its layout is unknown, entries not re-added"); return 0
+        }
+        Log.write("[wallpaper] lock screen: macOS replaced the Aerial catalog, \(missing.count) HapticGlow entr\(missing.count == 1 ? "y" : "ies") missing")
+        var next = data
+        do {
+            for m in missing {
+                let links = LockScreenCatalog.Links(video: userVideos.appendingPathComponent("\(m.id).mov").absoluteURL.absoluteString,
+                                                    preview: userThumbs.appendingPathComponent("\(m.id).png").absoluteURL.absoluteString)
+                next = try LockScreenCatalog.adding(.init(id: m.id, title: m.title), to: next, links: links)
+            }
+            try backUpOriginal(data, next: userManifest)
+            try next.write(to: userManifest, options: .atomic)
+        } catch { Log.write("[wallpaper] lock screen: could not re-add entries: \(error.localizedDescription)"); return 0 }
+        Log.write("[wallpaper] lock screen: re-added \(missing.count) entr\(missing.count == 1 ? "y" : "ies")")
+        restartAgents()
+        return missing.count
+    }
+
+    /// Sets a still of the item as the Idle (screen saver / lock screen) picture in Store/Index.plist, after a backup.
+    /// When that file cannot be edited, sets the desktop picture instead, which the lock screen also shows.
+    static func useStill(item: WallpaperInfo, stillURL: URL, fit: WallpaperFit, screen: NSScreen?) async throws -> String {
+        let size = LockScreenExporter.targetSize(screen: screen)
+        let backing = screen?.backingScaleFactor ?? 1
+        let prefix = LockScreenCatalog.assetID(for: item.id).prefix(8)
+        let dir = stillsFolder
+        let out = dir.appendingPathComponent("\(prefix)-\(Int(Date().timeIntervalSince1970)).png")
+        let ok: Bool = await Task.detached(priority: .utility) {
+            guard let src = CGImageSourceCreateWithURL(stillURL as CFURL, nil), let img = CGImageSourceCreateImageAtIndex(src, 0, nil),
+                  let composed = StillComposer.compose(still: img, fit: fit, pixelSize: size, backing: backing, edge: EdgeColor.of(img)) else { return false }
+            try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            WallpaperLibrary.writePNG(composed, to: out)
+            return FileManager.default.fileExists(atPath: out.path)
+        }.value
+        guard ok else { throw LockScreenError.failed("The still picture could not be created, so nothing was changed.") }
+        Log.write("[wallpaper] lock screen: still \(out.lastPathComponent) written at \(Int(size.width))x\(Int(size.height))")
+
+        if let data = try? Data(contentsOf: indexURL), let (root, fmt) = try? LockScreenIndex.decode(data), LockScreenIndex.hasTemplate(root) {
+            do {
+                let (next, n) = try LockScreenIndex.settingStill(out, in: root)
+                if LockScreenIndex.ourIdleCount(root) == 0 {
+                    try FileManager.default.createDirectory(at: backupsFolder, withIntermediateDirectories: true)
+                    let stamp = ISO8601DateFormatter().string(from: Date()).replacingOccurrences(of: ":", with: "")
+                    try data.write(to: backupsFolder.appendingPathComponent("Index-\(stamp).plist"))
+                    Log.write("[wallpaper] lock screen: backed up Index.plist")
+                }
+                try LockScreenIndex.encode(next, format: fmt).write(to: indexURL, options: .atomic)
+                Log.write("[wallpaper] lock screen: Idle choice set to the still in \(n) place\(n == 1 ? "" : "s")")
+                restartAgents()
+                pruneStills(keeping: out)
+                return "\"\(item.title)\" is now the lock screen picture (and the screen saver picture). Remove from Lock Screen puts the old choice back."
+            } catch { Log.write("[wallpaper] lock screen: Index.plist edit failed: \(error.localizedDescription)") }
+        }
+        guard let screen, userBaseOverride == nil else { throw LockScreenError.failed("The wallpaper settings could not be edited and no screen was found, so nothing was changed.") }
+        let key = DisplayKey.of(screen) ?? "main"
+        DesktopPictureSync.backUpIfNeeded(screen: screen, key: key, libraryRoot: WallpaperLibrary.defaultRoot)
+        do { try DesktopPictureSync.setPicture(out, screen: screen) } catch { throw LockScreenError.failed("Could not set the picture: \(error.localizedDescription)") }
+        Log.write("[wallpaper] lock screen: Index.plist not editable, set the desktop picture instead")
+        return "The lock screen settings could not be edited, so the still was set as the desktop picture instead. The lock screen shows it when it uses the desktop picture."
+    }
+
+    /// Deletes older stills of ours once a new one is in place.
+    private static func pruneStills(keeping: URL) {
+        for f in (try? FileManager.default.contentsOfDirectory(at: stillsFolder, includingPropertiesForKeys: nil)) ?? [] where f != keeping {
+            try? FileManager.default.removeItem(at: f)
+        }
+    }
+
+    /// Puts the Idle choice back from the newest Index.plist backup (only the nodes that show our still).
+    private static func restoreIndex() {
+        guard let data = try? Data(contentsOf: indexURL), let (root, fmt) = try? LockScreenIndex.decode(data), LockScreenIndex.ourIdleCount(root) > 0 else { return }
+        let newest = ((try? FileManager.default.contentsOfDirectory(at: backupsFolder, includingPropertiesForKeys: nil)) ?? [])
+            .filter { $0.lastPathComponent.hasPrefix("Index-") }.sorted { $0.lastPathComponent < $1.lastPathComponent }.last
+        let backup = newest.flatMap { try? Data(contentsOf: $0) }.flatMap { try? LockScreenIndex.decode($0).root }
+        let (next, n) = LockScreenIndex.restoring(root, from: backup)
+        do {
+            try LockScreenIndex.encode(next, format: fmt).write(to: indexURL, options: .atomic)
+            Log.write("[wallpaper] lock screen: restored \(n) Idle choice\(n == 1 ? "" : "s") from \(backup == nil ? "defaults (no backup found)" : "the Index.plist backup")")
+        } catch { Log.write("[wallpaper] lock screen: could not restore Index.plist: \(error.localizedDescription)") }
+        try? FileManager.default.removeItem(at: stillsFolder)
     }
 
     private static func replace(_ dest: URL, with src: URL) throws {
