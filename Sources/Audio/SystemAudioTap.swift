@@ -187,7 +187,12 @@ final class SystemAudioTap: @unchecked Sendable {
     init() {
         // Battery / Low Power Mode changes the watchdog's timer leeway.
         powerObserver = NotificationCenter.default.addObserver(forName: PowerState.didChange, object: nil, queue: nil) { [weak self] _ in
-            self?.setupQueue.async { if self?.watchdog != nil { self?.startWatchdog() } }
+            self?.setupQueue.async {
+                guard let self else { return }
+                if self.watchdog != nil { self.startWatchdog() }
+                // Battery saver trades ~8 ms of capture latency for 4x fewer IO wakeups in coreaudiod and here.
+                if let r = self.resources, r.aggregateID != AudioObjectID(kAudioObjectUnknown) { self.requestSmallBuffer(r.aggregateID) }
+            }
         }
     }
 
@@ -450,16 +455,16 @@ final class SystemAudioTap: @unchecked Sendable {
         return true
     }
 
-    /// Asks the aggregate for a 128-frame IO buffer (lower capture latency). The device may clamp or refuse;
-    /// the size actually in effect is logged once per build.
+    /// Asks the aggregate for a small IO buffer: 128 frames on mains (lower capture latency), 512 on battery
+    /// saver (far fewer wakeups). The device may clamp or refuse; the size in effect is logged.
     private func requestSmallBuffer(_ dev: AudioObjectID) {
         var a = gAddr(kAudioDevicePropertyBufferFrameSize)
-        var want: UInt32 = 128
+        var want: UInt32 = PowerState.shared.saver ? 512 : 128
         let st = AudioObjectSetPropertyData(dev, &a, 0, nil, UInt32(MemoryLayout<UInt32>.size), &want)
         var got: UInt32 = 0
         var sz = UInt32(MemoryLayout<UInt32>.size)
         let gs = AudioObjectGetPropertyData(dev, &a, 0, nil, &sz, &got)
-        Log.write("[tap] IO buffer frames: requested 128, set status \(st), actual \(gs == noErr ? String(got) : "unknown")")
+        Log.write("[tap] IO buffer frames: requested \(want), set status \(st), actual \(gs == noErr ? String(got) : "unknown")")
     }
 
     // MARK: watchdog

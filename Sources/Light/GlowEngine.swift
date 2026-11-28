@@ -233,7 +233,9 @@ final class GlowEngine: @unchecked Sendable {
     private var heartSampling = false
     private var onsetDemand = true
     private static let onsetModes: Set<GlowMode> = [.beatPulse, .beatStrobe, .metronome]
-    private static let idleHz = 30
+    /// Idle rate while nothing changes; input wakes the timer at once (wakeIfSlow), so this only bounds the
+    /// first-frame delay. Lower on battery saver.
+    private static var idleHz: Int { PowerState.shared.saver ? 8 : 20 }
     /// Back to active rate immediately (input arrived while idle). Any thread.
     private func wakeIfSlow() {
         guard slowFlag.get() else { return }
