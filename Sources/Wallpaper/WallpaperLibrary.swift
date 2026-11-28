@@ -96,6 +96,8 @@ final class WallpaperLibrary {
     init(root: URL = WallpaperLibrary.defaultRoot) {
         self.root = root
         reload()
+        // Snapshot mode shares UserDefaults with the real app, so it must not mark built-ins as seeded.
+        if !SnapshotMode.active { seedBuiltIns() }
     }
 
     func folder(_ id: String) -> URL { root.appendingPathComponent(id, isDirectory: true) }
@@ -177,6 +179,60 @@ final class WallpaperLibrary {
     func delete(_ id: String) {
         try? FileManager.default.removeItem(at: folder(id))
         items.removeAll { $0.id == id }
+    }
+
+    // MARK: Built-in wallpapers
+
+    /// Original pixel-art loops bundled in Resources/DefaultWallpapers (generators in Tools/wallpapers).
+    nonisolated static let builtIns: [(file: String, title: String)] = [
+        ("harbor", "Dusk Harbor"), ("night-court", "Night Court"), ("arena", "Tip-Off"),
+    ]
+    private static let seededKey = "wallpaper.seededBuiltIns"
+    nonisolated static func builtInID(_ file: String) -> String { "builtin-\(file)" }
+
+    var missingBuiltIns: Bool { Self.builtIns.contains { item(Self.builtInID($0.file)) == nil } }
+
+    /// Copies each bundled wallpaper in once. One the user deletes stays deleted until restoreBuiltIns().
+    func seedBuiltIns(force: Bool = false) {
+        guard let dir = Bundle.main.resourceURL?.appendingPathComponent("DefaultWallpapers", isDirectory: true) else { return }
+        let fm = FileManager.default
+        var seeded = Set(UserDefaults.standard.stringArray(forKey: Self.seededKey) ?? [])
+        for (i, b) in Self.builtIns.enumerated() where force || !seeded.contains(b.file) {
+            let id = Self.builtInID(b.file)
+            let src = dir.appendingPathComponent("\(b.file).gif")
+            guard item(id) == nil, let source = CGImageSourceCreateWithURL(src as CFURL, nil),
+                  let first = CGImageSourceCreateImageAtIndex(source, 0, nil) else { seeded.insert(b.file); continue }
+            let dest = folder(id)
+            do {
+                try fm.createDirectory(at: dest, withIntermediateDirectories: true)
+                try? fm.removeItem(at: dest.appendingPathComponent("media.gif"))
+                try fm.copyItem(at: src, to: dest.appendingPathComponent("media.gif"))
+                Self.writePNG(first, to: stillURL(id))
+                if let big = Self.scaleNearest(first, by: 2) { Self.writeJPEG(big, to: thumbURL(id)) }
+                // Older than anything the user adds, so imports stay at the top of the grid.
+                let info = WallpaperInfo(id: id, title: b.title, artist: "Built-in", sourceURL: nil, site: "Built-in", kind: .animatedImage,
+                                         pixelWidth: first.width, pixelHeight: first.height, isPixelArt: true,
+                                         added: Date(timeIntervalSince1970: Double(Self.builtIns.count - i)), mediaFile: "media.gif")
+                try write(info)
+                seeded.insert(b.file)
+            } catch {
+                try? fm.removeItem(at: dest)
+                Log.write("[wallpaper] built-in \(b.file) failed: \(error.localizedDescription)")
+            }
+        }
+        UserDefaults.standard.set(Array(seeded).sorted(), forKey: Self.seededKey)
+        reload()
+    }
+
+    func restoreBuiltIns() { seedBuiltIns(force: true) }
+
+    nonisolated static func scaleNearest(_ image: CGImage, by k: Int) -> CGImage? {
+        let cs = CGColorSpace(name: CGColorSpace.sRGB) ?? CGColorSpaceCreateDeviceRGB()
+        guard let ctx = CGContext(data: nil, width: image.width * k, height: image.height * k, bitsPerComponent: 8, bytesPerRow: 0, space: cs,
+                                  bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
+        ctx.interpolationQuality = .none
+        ctx.draw(image, in: CGRect(x: 0, y: 0, width: image.width * k, height: image.height * k))
+        return ctx.makeImage()
     }
 
     func setPixelArt(_ id: String, _ on: Bool) {

@@ -112,6 +112,9 @@ struct WallpaperPage: View {
                 Button("Add") { addFromLink() }.controlSize(.small)
                     .disabled(importing || URL(string: linkText.trimmingCharacters(in: .whitespaces))?.scheme?.hasPrefix("http") != true)
             }
+            if library.missingBuiltIns {
+                Button("Restore Built-in Wallpapers") { library.restoreBuiltIns() }.controlSize(.small).buttonStyle(.link)
+            }
             if importing { ProgressView(value: progress).controlSize(.small) }
             if let message {
                 Text(message).font(Theme.Font.caption).foregroundStyle(messageIsError ? Theme.err : Theme.textSecondary)
