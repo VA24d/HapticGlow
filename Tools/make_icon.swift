@@ -24,107 +24,67 @@ func squircle(_ r: CGRect, n: CGFloat = 5) -> CGPath {
 }
 func lin(_ c: CGContext,_ g: CGGradient,_ a: CGPoint,_ b: CGPoint) { c.drawLinearGradient(g,start:a,end:b,options:[.drawsBeforeStartLocation,.drawsAfterEndLocation]) }
 
+// Sunrise over water: the horizon bar is a lit key edge, the rays echo the keyboard-brightness glyph,
+// the reflection is rows of key-shaped dashes, and the whole square reads as a dusk wallpaper.
 func render(_ px: Int) -> CGImage {
     let s = CGFloat(px)/1024
-    let small = px <= 32      // simplified detail
+    let small = px <= 32      // drop the reflection, fewer and thicker rays
     let tiny = px <= 16
     let c = CGContext(data:nil,width:px,height:px,bitsPerComponent:8,bytesPerRow:0,space:cs,bitmapInfo:CGImageAlphaInfo.premultipliedLast.rawValue)!
     c.setAllowsAntialiasing(true); c.interpolationQuality = .high
     c.scaleBy(x:s,y:s)
-    func shadow(_ dy: CGFloat,_ blur: CGFloat,_ color: CGColor) { c.setShadow(offset: CGSize(width:0,height:-dy*s), blur: blur*s, color: color) }
-
-    // body (squircle n=5, 824 px)
+    c.setLineCap(.round)
+    let ink = col(255,246,232), amber = col(255,190,110)
     let bp = squircle(CGRect(x:100,y:100,width:824,height:824))
-    c.saveGState(); shadow(12,28,col(0,0,0,0.32))
-    c.addPath(bp); c.setFillColor(col(27,28,32)); c.fillPath(); c.restoreGState()
+    c.saveGState(); c.setShadow(offset: CGSize(width:0,height:-12*s), blur: 28*s, color: col(0,0,0,0.32))
+    c.addPath(bp); c.setFillColor(col(20,22,44)); c.fillPath(); c.restoreGState()
+
+    let hy: CGFloat = small ? 470 : 476
     c.saveGState(); c.addPath(bp); c.clip()
-    lin(c, grad([(0,col(0x1B,0x1C,0x20)),(1,col(0x34,0x36,0x3C))]), CGPoint(x:512,y:100), CGPoint(x:512,y:924))
-    lin(c, grad([(0,col(255,255,255,0)),(1,col(255,255,255,0.05))]), CGPoint(x:512,y:560), CGPoint(x:512,y:924))
+    // sky
+    lin(c, grad([(0,col(0xF0,0xA4,0x70)),(0.18,col(0x9C,0x5C,0x68)),(0.52,col(0x3A,0x2C,0x56)),(1,col(0x14,0x16,0x2C))]), CGPoint(x:512,y:hy), CGPoint(x:512,y:924))
+    // water: fades in over 70 px below the horizon, so there is no hard full-width line
+    c.saveGState(); c.clip(to: CGRect(x:0,y:0,width:1024,height:hy))
+    lin(c, grad([(0,col(0x7A,0x4E,0x5E)),(0.12,col(0x34,0x26,0x42)),(0.5,col(0x18,0x16,0x2A)),(1,col(0x0C,0x0C,0x16))]), CGPoint(x:512,y:hy), CGPoint(x:512,y:100))
     c.restoreGState()
-    // 1 px aluminium rim at ~18% white
-    c.saveGState(); c.addPath(bp); c.clip()
-    c.addPath(bp); c.setLineWidth(2/s); c.replacePathWithStrokedPath(); c.clip()
-    c.setFillColor(col(255,255,255,0.18)); c.fill(CGRect(x:0,y:0,width:1024,height:1024)); c.restoreGState()
+    let sun = CGPoint(x:512,y:hy)
+    c.drawRadialGradient(grad([(0,col(255,214,150,0.50)),(0.45,col(255,190,120,0.14)),(1,col(255,190,120,0))]), startCenter:sun, startRadius:0, endCenter:sun, endRadius:200, options:[])
 
-    // cap geometry: half-width 250, 14 px skirt
-    let cxm: CGFloat = 512
-    let baseR = CGRect(x:262,y:276,width:500,height:480)
-    let faceR = CGRect(x:284,y:290,width:456,height:448)   // face sits 14 px above skirt bottom
-    let skirt = CGPath(roundedRect: baseR, cornerWidth:112, cornerHeight:112, transform:nil)
-    let face = CGPath(roundedRect: faceR, cornerWidth:92, cornerHeight:92, transform:nil)
-
-    // amber under-light spilling below the cap (soft, wide, ~sigma 60)
-    if !tiny {
-        c.saveGState(); c.addPath(bp); c.clip()
-        c.translateBy(x: cxm, y: 262); c.scaleBy(x: 1.45, y: 0.62)
-        var stops: [(CGFloat, CGColor)] = []
-        for i in 0...8 { let t = CGFloat(i)/8; let a = 0.12*exp(-pow(t*3.0,2)/2*1.0); stops.append((t, col(255,170,60,a))) }
-        stops[8].1 = col(255,170,60,0)
-        c.drawRadialGradient(grad(stops), startCenter:.zero, startRadius:0, endCenter:.zero, endRadius:240, options:[])
+    // rays
+    let lens: [CGFloat] = tiny ? [180] : (small ? [90, 120, 150, 120, 90] : [56, 100, 78, 136, 78, 100, 56])
+    let rw: CGFloat = tiny ? 80 : (small ? 50 : 32)
+    let inner: CGFloat = tiny ? 120 : 130
+    let n = lens.count
+    for i in 0..<n {
+        let a = n == 1 ? CGFloat.pi / 2 : CGFloat.pi * (0.17 + 0.66 * CGFloat(i)/CGFloat(n-1))
+        let p0 = CGPoint(x: sun.x + cos(a)*inner, y: sun.y + sin(a)*inner)
+        let p1 = CGPoint(x: sun.x + cos(a)*(inner+lens[i]), y: sun.y + sin(a)*(inner+lens[i]))
+        let l = CGMutablePath(); l.move(to: p0); l.addLine(to: p1)
+        c.saveGState(); c.addPath(l.copy(strokingWithWidth: rw, lineCap: .round, lineJoin: .round, miterLimit: 1)); c.clip()
+        c.drawLinearGradient(grad([(0,ink),(1,amber)]), start: p0, end: p1, options: [.drawsBeforeStartLocation,.drawsAfterEndLocation])
         c.restoreGState()
     }
+    // horizon bar = lit key edge
+    let bh: CGFloat = small ? 175 : 160, bt: CGFloat = tiny ? 84 : (small ? 60 : 34)
+    let bar = CGRect(x: 512-bh, y: hy-bt/2, width: 2*bh, height: bt)
+    c.addPath(CGPath(roundedRect: bar, cornerWidth: small ? bt/2 : 11, cornerHeight: small ? bt/2 : 11, transform: nil)); c.setFillColor(ink); c.fillPath()
 
-    // skirt (darker)
-    c.saveGState(); shadow(16,30,col(0,0,0,0.55))
-    c.addPath(skirt); c.setFillColor(col(8,8,10)); c.fillPath(); c.restoreGState()
-    c.saveGState(); c.addPath(skirt); c.clip()
-    lin(c, grad([(0,col(10,10,12)),(1,col(34,35,39))]), CGPoint(x:512,y:276), CGPoint(x:512,y:756)); c.restoreGState()
+    // reflection: rows of key-shaped dashes on a soft wave
     if !small {
-        c.saveGState(); c.addPath(skirt); c.setLineWidth(3); c.replacePathWithStrokedPath(); c.clip()
-        lin(c, grad([(0,col(255,255,255,0.04)),(1,col(255,255,255,0.26))]), CGPoint(x:512,y:276), CGPoint(x:512,y:756)); c.restoreGState()
-    }
-    // face
-    c.saveGState(); c.addPath(face); c.clip()
-    lin(c, grad([(0,col(30,31,35)),(1,col(0x4A,0x4C,0x53))]), CGPoint(x:512,y:290), CGPoint(x:512,y:738))
-    if !small {
-        c.drawRadialGradient(grad([(0,col(255,255,255,0.05)),(1,col(255,255,255,0))]), startCenter: CGPoint(x:512,y:600), startRadius:0, endCenter: CGPoint(x:512,y:600), endRadius:290, options:[])
-        c.addPath(face); c.setLineWidth(10); c.replacePathWithStrokedPath(); c.clip()
-        lin(c, grad([(0,col(0,0,0,0.30)),(1,col(0,0,0,0))]), CGPoint(x:512,y:290), CGPoint(x:512,y:390))
+        let rows: [(n: Int, w: CGFloat, y: CGFloat, a: CGFloat)] = [(4, 70, hy - 84, 0.85), (3, 62, hy - 152, 0.65), (2, 54, hy - 216, 0.50)]
+        for (ri, r) in rows.enumerated() {
+            let gap: CGFloat = 16, total = CGFloat(r.n) * r.w + CGFloat(r.n - 1) * gap
+            for i in 0..<r.n {
+                let x0 = 512 - total/2 + CGFloat(i) * (r.w + gap)
+                let dy = 6 * sin(CGFloat(i) * 1.6 + CGFloat(ri))
+                let rect = CGRect(x: x0, y: r.y + dy - 14, width: r.w, height: 28)
+                c.addPath(CGPath(roundedRect: rect, cornerWidth: 7, cornerHeight: 7, transform: nil)); c.setFillColor(col(255,214,160,r.a)); c.fillPath()
+            }
+        }
     }
     c.restoreGState()
-    if !small {
-        c.saveGState(); c.addPath(face); c.setLineWidth(3); c.replacePathWithStrokedPath(); c.clip()
-        lin(c, grad([(0,col(255,255,255,0.06)),(1,col(255,255,255,0.36))]), CGPoint(x:512,y:290), CGPoint(x:512,y:738)); c.restoreGState()
-    }
-
-    // waveform: wider Gaussian window (+15%), centre peak 65% of 122 px
-    let cy: CGFloat = (faceR.midY)
-    let amp: CGFloat = tiny ? 120 : (small ? 108 : 79), half: CGFloat = small ? 170 : 188
-    let freq: CGFloat = tiny ? 5.6 : (small ? 6.6 : 9.2*175/188)
-    let w = CGMutablePath()
-    let n = 240
-    for i in 0...n {
-        let x = 512 - half + 2*half*CGFloat(i)/CGFloat(n)
-        let u = (x-512)/half
-        let y = cy + amp*exp(-pow(u*2.0,2))*cos(u*freq)
-        i==0 ? w.move(to:CGPoint(x:x,y:y)) : w.addLine(to:CGPoint(x:x,y:y))
-    }
-    // stroke >= 28 px at 1024; 16 px gets >= 2.2 px, 32 px >= 3 px
-    var lw: CGFloat = 30
-    if tiny { lw = 2.3/s } else if px <= 32 { lw = 2.8/s } else if px <= 64 { lw = 34 }
-    func sk(_ extra: CGFloat) -> CGPath { w.copy(strokingWithWidth: lw+extra, lineCap:.round, lineJoin:.round, miterLimit:4) }
-    let sp = sk(0)
-
-    if !small {
-        // restrained bloom: <10% alpha, <40 px radius
-        c.saveGState(); c.addPath(face); c.clip()
-        shadow(0,34,col(255,160,50,0.09))
-        c.addPath(sp); c.setFillColor(col(255,170,60,0.09)); c.fillPath(); c.restoreGState()
-        // engraved groove: lower-lip highlight (1.5 px, amber-tinted 25% white), then dark channel, then 2 px dark inner stroke above
-        c.saveGState(); c.addPath(face); c.clip()
-        c.translateBy(x:0,y:-1.5)
-        c.addPath(sk(7)); c.setFillColor(col(255,235,205,0.25)); c.fillPath(); c.restoreGState()
-        c.saveGState(); c.addPath(face); c.clip()
-        c.addPath(sk(7)); c.setFillColor(col(6,6,8,0.55)); c.fillPath(); c.restoreGState()
-        c.saveGState(); c.addPath(face); c.clip()
-        c.translateBy(x:0,y:2)
-        c.addPath(sk(7)); c.addPath(sk(3)); // ring of 2 px dark on the upper side
-        c.setFillColor(col(0,0,0,0.45)); c.fillPath(using: .evenOdd); c.restoreGState()
-    }
-    // amber stroke, vertical gradient #FFC76A -> #F2A03A, no hot core
-    c.saveGState(); c.addPath(sp); c.clip()
-    lin(c, grad([(0,col(0xF2,0xA0,0x3A)),(1,col(0xFF,0xC7,0x6A))]), CGPoint(x:512,y:cy-amp-lw/2), CGPoint(x:512,y:cy+amp+lw/2))
-    c.restoreGState()
+    // 1 px rim
+    c.saveGState(); c.addPath(bp); c.setStrokeColor(col(255,255,255,0.10)); c.setLineWidth(3); c.strokePath(); c.restoreGState()
     return c.makeImage()!
 }
 func save(_ img: CGImage,_ path: String) {

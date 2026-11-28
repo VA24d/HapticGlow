@@ -34,6 +34,8 @@
 	<true/>
 	<key>NSHumanReadableCopyright</key>
 	<string>HapticGlow by Vijay A (https://github.com/VA24d/HapticGlow). Copyright 2026 Vijay A. GPL-3.0-only. Key sounds: kbsim by Thomas Lai (MIT).</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>HapticGlow uses the microphone only when you press Measure with microphone, to time glow and haptics to your speakers. The audio is analysed in memory and is never stored or sent.</string>
 	<key>NSSupportsAutomaticTermination</key>
 	<false/>
 	<key>NSSupportsSuddenTermination</key>

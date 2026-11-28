@@ -8,6 +8,7 @@ import SwiftUI
 struct SyncFineTune: View {
     @State private var model = AppModel.shared
     @State private var cal = TapCalibrator.shared
+    @State private var mic = MicSync.shared
 
     private var uid: String { model.outputDeviceUID }
     private var deviceName: String { model.outputDeviceName.isEmpty ? "this output" : model.outputDeviceName }
@@ -41,6 +42,7 @@ struct SyncFineTune: View {
                 .font(Theme.Font.caption).foregroundStyle(Theme.textTertiary)
                 .fixedSize(horizontal: false, vertical: true)
             tapAlong
+            micMeasure
         }
     }
 
@@ -90,6 +92,48 @@ struct SyncFineTune: View {
                 Spacer(minLength: 8)
                 Button("Try again") { cal.start() }.controlSize(.small)
                 Button("Close") { cal.dismiss() }.controlSize(.small)
+            }
+        }
+    }
+
+    @ViewBuilder private var micMeasure: some View {
+        switch mic.phase {
+        case .idle:
+            HStack(alignment: .firstTextBaseline) {
+                Text("Or play music through the speakers and let the built-in microphone time it. Takes about 8 seconds, nothing is recorded to disk.")
+                    .font(Theme.Font.caption).foregroundStyle(Theme.textTertiary)
+                    .fixedSize(horizontal: false, vertical: true)
+                Spacer(minLength: 8)
+                Button("Measure with microphone") { mic.start() }.controlSize(.small).disabled(cal.isListening)
+            }
+        case .preparing, .recording, .analyzing:
+            HStack {
+                Text(mic.phase == .analyzing ? "Working out the delay..." : (mic.phase == .recording ? "Listening. Keep the music playing and the room quiet." : "Getting ready..."))
+                    .font(Theme.Font.label)
+                Spacer()
+                ProgressView().controlSize(.small)
+                Button("Cancel") { mic.cancel() }.controlSize(.small)
+            }
+        case .done(let r):
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Measured \(Int(r.measuredMs.rounded())) ms (\(r.deviceName)). Reported \(Int(r.reportedMs.rounded())) ms.")
+                    .font(Theme.Font.label)
+                Text(abs(r.neededOffsetMs) > 300
+                     ? "Applying sets Fine-tune to its limit of \(r.neededOffsetMs > 0 ? "+300" : "-300") ms, short of the measured delay."
+                     : String(format: "Applying sets Fine-tune to %+.0f ms for this output.", r.neededOffsetMs))
+                    .font(Theme.Font.caption).foregroundStyle(Theme.textTertiary)
+                HStack {
+                    Button("Apply") { mic.apply() }.controlSize(.small)
+                    Button("Discard") { mic.dismiss() }.controlSize(.small)
+                }
+            }
+        case .failed(let msg):
+            HStack(alignment: .firstTextBaseline) {
+                Text(msg).font(Theme.Font.caption).foregroundStyle(Theme.warn)
+                    .fixedSize(horizontal: false, vertical: true)
+                Spacer(minLength: 8)
+                Button("Try again") { mic.start() }.controlSize(.small)
+                Button("Close") { mic.dismiss() }.controlSize(.small)
             }
         }
     }

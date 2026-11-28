@@ -40,6 +40,7 @@ struct RootView: View {
         case .haptics: HapticsView()
         case .sounds: SoundsView()
         case .audio: AudioInputView()
+        case .wallpaper: WallpaperPage()
         case .permissions: PermissionsView()
         case .settings: SettingsView()
         }

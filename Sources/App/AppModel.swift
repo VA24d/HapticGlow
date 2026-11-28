@@ -8,7 +8,7 @@ import AppKit
 import Observation
 
 enum SidebarItem: String, CaseIterable, Identifiable, Hashable {
-    case dashboard, practice, glow, haptics, sounds, audio, permissions, settings
+    case dashboard, practice, glow, haptics, sounds, audio, wallpaper, permissions, settings
     var id: String { rawValue }
     var title: String {
         switch self {
@@ -18,6 +18,7 @@ enum SidebarItem: String, CaseIterable, Identifiable, Hashable {
         case .haptics: return "Trackpad Haptics"
         case .sounds: return "Key Sounds"
         case .audio: return "Audio Input"
+        case .wallpaper: return "Live Wallpaper"
         case .permissions: return "Permissions"
         case .settings: return "Settings"
         }
@@ -30,6 +31,7 @@ enum SidebarItem: String, CaseIterable, Identifiable, Hashable {
         case .haptics: return "hand.point.up.left"
         case .sounds: return "keyboard"
         case .audio: return "waveform"
+        case .wallpaper: return "photo.on.rectangle.angled"
         case .permissions: return "lock.shield"
         case .settings: return "gearshape"
         }
@@ -37,7 +39,7 @@ enum SidebarItem: String, CaseIterable, Identifiable, Hashable {
     var section: String {
         switch self {
         case .dashboard, .practice: return "Live"
-        case .glow, .haptics, .sounds, .audio: return "Engines"
+        case .glow, .haptics, .sounds, .audio, .wallpaper: return "Engines"
         case .permissions, .settings: return "App"
         }
     }
@@ -63,6 +65,8 @@ final class AppModel {
     var glow: GlowConfig { didSet { if glow != oldValue { NowPlaying.shared.glowEdited(from: oldValue); GlowEngine.shared.update(glow); save() } } }
     var haptic: HapticConfig { didSet { if haptic != oldValue { NowPlaying.shared.hapticEdited(from: oldValue); pushHaptic(); save(); syncHapticRunState() } } }
     var sound: SoundConfig { didSet { if sound != oldValue { KeySoundEngine.shared.update(sound); save() } } }
+    /// Live wallpaper settings. The engine applies each change; quitting restores the system desktop picture.
+    var wallpaper: WallpaperConfig { didSet { if wallpaper != oldValue { save(); WallpaperEngine.shared.apply(wallpaper) } } }
     var onsetSensitivity: Float { didSet { FeatureBus.shared.sensitivity = onsetSensitivity; save() } }
     /// Audio-to-ear sync. Pushed to SyncClock; OutputLatency supplies the measured device latency.
     var sync: SyncConfig { didSet { if sync != oldValue { pushSync(); save() } } }
@@ -148,6 +152,7 @@ final class AppModel {
         haptic = load("haptic.v2", HapticConfig())
         sound = load("sound.v2", SoundConfig())
         sync = load("sync.v1", SyncConfig())
+        wallpaper = load("wallpaper.v1", WallpaperConfig())
         onsetSensitivity = UserDefaults.standard.object(forKey: "onsetSensitivity") as? Float ?? 1.0
         showInMenuBar = UserDefaults.standard.object(forKey: "showInMenuBar") as? Bool ?? true
         hasCompletedOnboarding = UserDefaults.standard.bool(forKey: "onboarded.v2")
@@ -163,6 +168,7 @@ final class AppModel {
         if let d = try? enc.encode(savedHaptic) { defaults.set(d, forKey: "haptic.v2") }
         if let d = try? enc.encode(sound) { defaults.set(d, forKey: "sound.v2") }
         if let d = try? enc.encode(sync) { defaults.set(d, forKey: "sync.v1") }
+        if let d = try? enc.encode(wallpaper) { defaults.set(d, forKey: "wallpaper.v1") }
         defaults.set(onsetSensitivity, forKey: "onsetSensitivity")
         defaults.set(showInMenuBar, forKey: "showInMenuBar")
         defaults.set(hasCompletedOnboarding, forKey: "onboarded.v2")
@@ -212,11 +218,15 @@ final class AppModel {
         BacklightDriver.recoverIfNeeded()
         pushSync()
         OutputLatency.shared.start()
+        _ = MicSyncTapRing.shared   // create off the realtime thread
         FeatureBus.shared.cutoffHz = haptic.cutoffHz
         FeatureBus.shared.sensitivity = onsetSensitivity
 
         for src in [SystemAudioTap.shared as AudioCapture, ScreenCaptureAudio.shared as AudioCapture] {
-        src.sink = { ptr, n, sr in AudioAnalyzer.shared.process(ptr, count: n, sampleRate: sr) }
+        src.sink = { ptr, n, sr in
+            AudioAnalyzer.shared.process(ptr, count: n, sampleRate: sr)
+            MicSyncTapRing.shared.push(ptr, n, sr)   // no-op unless a microphone measurement is running
+        }
         src.onStateChange = { [weak self] s in
             Task { @MainActor in
                 guard let self, src === self.capture else { return }
@@ -233,7 +243,7 @@ final class AppModel {
         GlowEngine.shared.update(glow)
         HapticEngine.shared.update(haptic)
         startMenuBarPolling()
-        if !SnapshotMode.active { NowPlaying.shared.start() }
+        if !SnapshotMode.active { NowPlaying.shared.start(); WallpaperEngine.shared.apply(wallpaper); LockScreenInstaller.reapplyIfNeeded() }
         KeySoundEngine.shared.update(sound)
         refreshPermissions()
 
@@ -309,6 +319,7 @@ final class AppModel {
     func shutdown() {
         guard !didShutdown else { return }
         didShutdown = true
+        WallpaperEngine.shared.shutdown()
         AudioSourceMonitor.shared.setActive(false)
         GlowEngine.shared.stop(quitting: true)
         HapticEngine.shared.stop()
